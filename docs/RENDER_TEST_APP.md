@@ -19,6 +19,7 @@ structures, not a placeholder: see `[RT-VIEW]` below.
 | `[F]` | M4.5: 3 frames reusing the same staging buffers (bounded reuse) |
 | `[L]` | M5 layer selection: **native** `renderTargetArrayLength` vs **per-slice fallback** vs CPU reference, each slice byte-compared (tolerance ±1); on pre-Apple5 the native path is expected to be refused (rc=6) and the fallback carries the session |
 | `[R]` | Metal ray tracing probe: MSL 2.4 `metal::raytracing::intersector` + BLAS/TLAS build + 32-ray exact query (t=2.5) — on non-RT hardware the kernel must be a compile REFUSAL |
+| `[X]` | **MSL cross-version matrix (Metal 1.1 → 4.0)**: the same canonical kernel compiled at every language version (`110 120 200 210 220 230 240 300 310 320 400`), dispatched on-device, byte-compared against a CPU reference AND against the first accepted version. Refuted versions carry the compiler's diagnostics. This is the project's cross-generation guarantee in one table. |
 | `[A]` | M7 tier-1 argument buffers prototype: classic == tier-1 outputs |
 | `[S]` | Summary: `checks=N failures=M wall=Xms` |
 
@@ -46,6 +47,9 @@ through a `CAMetalLayer`; the bottom half keeps the streaming test log.
   * `Apple9` (A17 Pro / M3 / M4): **hardware-accelerated** ray tracing.
   * `Apple4` (A11, iPhone 8 Plus etc.): NO ray tracing at all — the viewport
     shows an explanatory overlay and the session stays in log view.
+  * The scene kernel compiles through an honest chain `MSL 2.4 → 3.0 → 3.1 →
+    3.2 → 4.0` and logs which version the device accepted; the block `[X]`
+    matrix above documents language acceptance facts for the same device.
 * Log lines: `[RT-VIEW] start/alive: frame=N fps≈XX WxH` plus PASS/FAIL
   checks counted into the `[S]` summary, so a broken viewport fails the
   session, not just the log.

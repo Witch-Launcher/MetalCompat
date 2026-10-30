@@ -1086,6 +1086,106 @@ static void testRtBlock(void* dev, const mc::DeviceCaps& caps) {
     mcops_freeBuffer(&inst);
 }
 
+// ---------------------------------------------------------------------------
+// [X] MSL cross-version matrix (Metal 1.1 .. 4.0): compile the SAME canonical
+// kernel at every published language version and verify the executed results
+// are byte-identical to a CPU reference and to each other. Honest states:
+// versions the device/OS refuses are logged with the compiler's diagnostics;
+// accepted versions must produce identical bytes.
+static const char kXFillMsl[] = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+kernel void xfill(device const float* a [[buffer(0)]],
+                  device float* out [[buffer(1)]],
+                  constant uint2& dims [[buffer(2)]],
+                  uint tid [[thread_position_in_grid]]) {
+    if (tid >= dims.x) return;
+    out[tid] = a[tid] * 2.0f + float(dims.y);
+}
+)MSL";
+
+static void testCrossVersionBlock(void* dev, const mc::DeviceCaps& caps) {
+    const int vers[] = {110, 120, 200, 210, 220, 230, 240, 300, 310, 320, 400};
+    log("== [X] MSL cross-version matrix (Metal 1.1 ../ 4.0) ==");
+    log("  os=" + caps.osVersion + " baseline cedar MSL2.3=230; MSL4=400 needs iOS26");
+    constexpr uint32_t N = 64;
+    MCOpBuffer ab{}, ob{};
+    bool bufs = mcops_newBuffer(dev, N * 4, MCOP_STORAGE_AUTO, &ab) == 0 &&
+                mcops_newBuffer(dev, N * 4, MCOP_STORAGE_AUTO, &ob) == 0;
+    if (!bufs) { check(false, "[X] buffers"); return; }
+    float in[N], want[N];
+    for (uint32_t i = 0; i < N; ++i) in[i] = (float)i - 8.0f;
+    constexpr float kK = 7.0f;
+    for (uint32_t i = 0; i < N; ++i) want[i] = in[i] * 2.0f + kK;
+    mcops_writeBufferHost(&ab, in, sizeof in);
+
+    int okN = 0;
+    std::string okList, refusList;
+    bool haveRef = false;
+    float refOut[N];
+    for (int v : vers) {
+        char err[512] = {0};
+        void* lib = nullptr;
+        const std::string tag = "[" + std::to_string(v) + "]";
+        const int rc = mcops_compileLibraryEx(dev, kXFillMsl, v, err,
+                                              sizeof(err), &lib);
+        if (rc != 0 || !lib) {
+            log("  " + tag + " REFUSED rc=" + std::to_string(rc) + "  " + err);
+            refusList += " " + std::to_string(v);
+            continue;
+        }
+        id<MTLLibrary> msl = (__bridge_transfer id<MTLLibrary>)lib;
+        id<MTLFunction> fn = [msl newFunctionWithName:@"xfill"];
+        id<MTLDevice> dv = (__bridge id<MTLDevice>)dev;
+        id<MTLComputePipelineState> ps =
+            fn ? [dv newComputePipelineStateWithFunction:fn error:nil] : nil;
+        if (!ps) {
+            log("  " + tag + " pipeline create FAIL");
+            refusList += " " + std::to_string(v);
+            continue;
+        }
+        const uint32_t dims[2] = {N, (uint32_t)kK};
+        id<MTLBuffer> dimB = [dv newBufferWithBytes:dims length:8 options:0];
+        id<MTLCommandQueue> q = [dv newCommandQueue];
+        id<MTLCommandBuffer> cb = [q commandBuffer];
+        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+        [ce setComputePipelineState:ps];
+        [ce setBuffer:(__bridge id<MTLBuffer>)ab.handle offset:0 atIndex:0];
+        [ce setBuffer:(__bridge id<MTLBuffer>)ob.handle offset:0 atIndex:1];
+        [ce setBuffer:dimB offset:0 atIndex:2];
+        [ce dispatchThreadgroups:MTLSizeMake(1, 1, 1)
+             threadsPerThreadgroup:MTLSizeMake(N, 1, 1)];
+        [ce endEncoding];
+        [cb commit];
+        [cb waitUntilCompleted];
+        if (cb.status != MTLCommandBufferStatusCompleted) {
+            log("  " + tag + " dispatch FAIL");
+            refusList += " " + std::to_string(v);
+            continue;
+        }
+        float got[N];
+        mcops_readBufferHost(&ob, got, sizeof got);
+        const bool exact = std::memcmp(got, want, sizeof got) == 0;
+        const bool cross = haveRef && std::memcmp(got, refOut, sizeof got) == 0;
+        if (!haveRef) { haveRef = true; memcpy(refOut, got, sizeof got); }
+        log("  " + tag + " OK bytes exact=" + std::to_string(exact ? 1 : 0) +
+            " identical-to-first=" + std::to_string(cross ? 1 : 0));
+        if (exact) { ++okN; okList += " " + std::to_string(v); }
+        else check(false, "[X] " + tag + " byte exact vs CPU reference");
+    }
+    if (okN > 0) {
+        check(true, "[X] " + std::to_string(okN) +
+                        " MSL versions compiled and produced CPU-exact, "
+                        "mutually-identical results (versions:" + okList + ")");
+    } else {
+        check(false, "[X] no MSL language accepted on this device");
+    }
+    if (!refusList.empty())
+        log("  refused-on-this-device:[" + refusList + " ]");
+    mcops_freeBuffer(&ab);
+    mcops_freeBuffer(&ob);
+}
+
 static void testArgT1Block(void* dev) {
     log("== [A] tier-1 argument buffers prototype (M7) ==");
     const int gate = mcops_argT1Support(dev);
@@ -1202,12 +1302,26 @@ static void testArgT1Block(void* dev) {
     char errs[512] = {0};
     void* lib = nullptr;
     const std::string src = rtBuildShadeSource();
-    const int rc = mcops_compileLibraryEx((__bridge void*)_dev, src.c_str(), 240,
-                                          errs, sizeof(errs), &lib);
-    if (rc != 0 || !lib) {
-        [self fail:"MSL 2.4 RT kernel refused: " + std::string(errs)];
+    // Honest fallback chain, newest MSL first: on RT hardware each refused
+    // language produces the compiler's reason in the log; accepted versions
+    // compile the same scene body identically.
+    static const int kRtLangs[] = {240, 300, 310, 320, 400};
+    int rc = 1;
+    int usedLang = 0;
+    std::string probeLog;
+    for (int v : kRtLangs) {
+        rc = mcops_compileLibraryEx((__bridge void*)_dev, src.c_str(), v,
+                                    errs, sizeof(errs), &lib);
+        probeLog += " v" + std::to_string(v) + "=" +
+                    (rc == 0 && lib ? "ok" : ("refus(" + std::string(errs, 0, 120) + ")"));
+        if (rc == 0 && lib) { usedLang = v; break; }
+    }
+    if (usedLang == 0) {
+        [self fail:"MSL RT kernel refused at every version:" + probeLog];
         return false;
     }
+    log("[RT-VIEW] scene kernel compiled at MSL " + std::to_string(usedLang / 100) +
+        "." + std::to_string(usedLang % 100) + "; chain:" + probeLog);
     id<MTLLibrary> msl = (__bridge_transfer id<MTLLibrary>)lib;
     id<MTLFunction> fn = [msl newFunctionWithName:@"rt_shade"];
     id<MTLFunction> vf = [msl newFunctionWithName:@"quadVert"];
@@ -1556,7 +1670,7 @@ void MCRunTestSession(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const auto g0 = std::chrono::steady_clock::now();
         openLogFile();
-        log("MCRenderTest session v1.1 (built " __DATE__ " " __TIME__ ")");
+        log("MCRenderTest session v1.3 (built " __DATE__ " " __TIME__ ")");
         mc::DeviceCaps caps;
         const int rc = mcmtl_probeDefaultDevice(&caps);
         if (rc != 0) {
@@ -1572,6 +1686,7 @@ void MCRunTestSession(void) {
         runBlock("[L] layer-selection", [&] { testLayeredBlock(dev); });
         runBlock("[A] tier1-argbufs", [&] { testArgT1Block(dev); });
         runBlock("[R] ray-tracing", [&] { testRtBlock(dev, caps); });
+        runBlock("[X] msl-cross-version", [&] { testCrossVersionBlock(dev, caps); });
         const auto g1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(g1 - g0).count();
         log("== [S] summary ==");

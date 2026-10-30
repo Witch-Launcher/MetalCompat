@@ -234,9 +234,24 @@ int mcops_compileLibraryEx(void* device, const char* mslSource, int mslLangVersi
         NSString* src = [NSString stringWithCString:mslSource
                                            encoding:NSUTF8StringEncoding];
         MTLCompileOptions* opts = [MTLCompileOptions new];
+        // MSL language version map, verified against MTLLibrary.h enum values
+        // (major<<16)+minor on the deployed SDK. Each entry compiles the enum
+        // regardless of runtime OS; devices refuse unsupported versions at
+        // runtime and the compiler diagnostic is surfaced verbatim.
         switch (mslLangVersion) {
+            // MTL 1.0 is deprecated up to iOS16 / macOS-unavailable, so the compat
+            // surface starts at MSL 1.1 (Metal 1 era, iOS 9 / macOS 10.11).
+            case 110: opts.languageVersion = MTLLanguageVersion1_1; break;
+            case 120: opts.languageVersion = MTLLanguageVersion1_2; break;
+            case 200: opts.languageVersion = MTLLanguageVersion2_0; break;
+            case 210: opts.languageVersion = MTLLanguageVersion2_1; break;
             case 220: opts.languageVersion = MTLLanguageVersion2_2; break;
             case 230: opts.languageVersion = MTLLanguageVersion2_3; break;
+            case 240: opts.languageVersion = MTLLanguageVersion2_4; break;
+            case 300: opts.languageVersion = MTLLanguageVersion3_0; break;
+            case 310: opts.languageVersion = MTLLanguageVersion3_1; break;
+            case 320: opts.languageVersion = MTLLanguageVersion3_2; break;
+            case 400: opts.languageVersion = MTLLanguageVersion4_0; break;
             default:
                 if (errBuf && errBufLen)
                     snprintf(errBuf, errBufLen, "unsupported MSL version %d", mslLangVersion);
