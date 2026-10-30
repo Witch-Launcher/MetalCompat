@@ -19,6 +19,7 @@
 //
 // ARC mandatory. No imports from tests/ — only the public backend headers.
 #import <UIKit/UIKit.h>
+#import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
@@ -85,6 +86,31 @@ kernel void vec_add(const device float* a [[buffer(0)]],
                     device float* sum [[buffer(2)]],
                     uint id [[thread_position_in_grid]]) {
     sum[id] = a[id] + b[id];
+}
+)MSL";
+
+// RT probe (MSL 2.4 — Apple6+/A14 hardware): BLAS+TLAS then ray queries.
+// 3 rays, all origin (0, 0.25, 2); quarter 1 hits the triangle plane z=-0.5
+// at t=2.5 (exact dyadic), rays 2/3 go away (distance=inf, instance=none).
+static const char kRtProbeMsl[] = R"MSL(
+#include <metal_stdlib>
+#include <metal_raytracing>
+using namespace metal;
+using namespace metal::raytracing;
+
+struct RtHit { float dist; uint iid; };
+
+kernel void rt_probe(device const float3* ro [[buffer(0)]],
+                     device const float3* rd [[buffer(1)]],
+                     acceleration_structure<instancing> as [[buffer(2)]],
+                     device RtHit* out [[buffer(3)]],
+                     uint tid [[thread_position_in_grid]]) {
+    intersector<float, instancing> i;
+    auto h = i.intersect(as, ray(ro[tid], rd[tid]));
+    RtHit o;
+    o.dist = h.distance;
+    o.iid = h.instance_id;
+    out[tid] = o;
 }
 )MSL";
 
@@ -475,7 +501,6 @@ static void testLayeredBlock(void* dev) {
     log("== [L] layer selection: native vs fallback vs CPU reference (M5) ==");
     const int gate = mcops_supportsLayerSelection(dev);
     log("  supportsLayerSelection=" + std::to_string(gate));
-    bool refused = true;
 
     mc::ShaderVariantLibrary variants(
         [](const std::string& src, const std::string& key, void** outLib,
@@ -557,10 +582,11 @@ static void testLayeredBlock(void* dev) {
                 for (int i = 0; i < 4; ++i) pe[i] = (uint8_t)(ce[i] * 255.0f + 0.5f);
             }
 
-    auto renderAndVerify = [&](void* pipeHandle, const char* tag) {
+    auto renderAndVerify = [&](void* pipeHandle, const char* tag, int* outRc) {
         MCLayeredRenderParams p = rp;
         p.pipeline = pipeHandle;
         const int rc = mcops_renderLayeredNative(dev, &p);
+        *outRc = rc;
         if (rc != 0) {
             if (rc == 6) {
                 log("  native path REFUSED (rc=6), hardware gate unmet —");
@@ -595,20 +621,24 @@ static void testLayeredBlock(void* dev) {
         }
     };
 
-    renderAndVerify(pipeN, "native");
-    if (g_failed == 0) {
-        refused = false; // native succeeded
+    int nativeRc = -1;
+    renderAndVerify(pipeN, "native", &nativeRc);
+    if (nativeRc == 0) {
         log("  native layer selection WORKS (renderTargetArrayLength=" +
             std::to_string(S) + ")");
+    } else if (nativeRc == 6) {
+        log("  native path unavailable on this hardware (rc=6): per-slice");
+        log("  fallback translation carries the session (Apple<5 iOS device).");
     }
-    if (gate == 1 && refused) check(false, "gate reports 1 but native op refused");
+    if (gate == 1 && nativeRc != 0) check(false, "gate reports 1 but native op refused");
 
     {
         MCLayeredRenderParams p = rp;
         p.pipeline = pipeF;
         const int rcF = mcops_renderLayeredFallback(dev, &p);
-        if (rcF != 0) check(false, "fallback render rc=" + std::to_string(rcF));
-        else {
+        if (rcF != 0) {
+            check(false, "fallback render rc=" + std::to_string(rcF));
+        } else {
             check(true, "fallback rendered");
             for (uint32_t s = 0; s < S; ++s) {
                 if (mcops_downloadTextureSlice(dev, tex, s, 0, down.handle) != 0) {
@@ -636,6 +666,159 @@ static void testLayeredBlock(void* dev) {
     mcops_freeRenderPipeline(pipeF);
     variants.releaseVariant(vN.cookie);
     variants.releaseVariant(vF.cookie);
+}
+
+static void testRtBlock(void* dev, const mc::DeviceCaps& caps) {
+    log("== [R] ray tracing: BLAS+TLAS + ray query (gate Apple6+/A14) ==");
+    id<MTLDevice> devc = (__bridge id<MTLDevice>)dev;
+    const bool rtSel = [devc supportsRaytracing] == YES;
+    const bool f6 = mc::supportsFamily(caps, mc::family::Apple6);
+    const bool f7 = mc::supportsFamily(caps, mc::family::Apple7) ||
+                    mc::supportsFamily(caps, mc::family::Apple8) ||
+                    mc::supportsFamily(caps, mc::family::Apple9) ||
+                    mc::supportsFamily(caps, mc::family::Apple10);
+    log("  supportsRaytracing=" + std::to_string(rtSel) + " apple6=" + std::to_string(f6) +
+        " apple7+=" + std::to_string(f7));
+    check(rtSel == (f6 || f7),
+          "supportsRaytracing agrees with the Apple6+/A14-family gate");
+
+    void* lib = nullptr;
+    char err[512] = {0};
+    int rc = mcops_compileLibraryEx(dev, kRtProbeMsl, 240, err, sizeof(err), &lib);
+    if (!rtSel) {
+        // Non-RT hardware (Apple4/A11...): the compiler MUST refuse the kernel.
+        if (lib) mcops_freeLibrary(lib);
+        check(lib == nullptr,
+              "intersector kernel correctly REFUSED on non-RT hardware (rc=" +
+              std::to_string(rc) + ")");
+        log("  compiler diagnostics: " + std::string(err));
+        return;
+    }
+    if (rc != 0 || !lib) {
+        check(false, std::string("intersector kernel compiled on RT hardware: ") + err);
+        return;
+    }
+    check(true, "MSL 2.4 intersector kernel compiled");
+    id<MTLLibrary> rtLib = (__bridge_transfer id<MTLLibrary>)lib;
+    id<MTLFunction> fn = [rtLib newFunctionWithName:@"rt_probe"];
+    if (!fn) { check(false, "rt_probe function found"); return; }
+    check(true, "rt_probe function found");
+
+    // Vertex buffer: one triangle A(0,-0.5,-0.5) B(0.6,0.5,-0.5) C(-0.6,0.5,-0.5).
+    MCOpBuffer vt{}, ro{}, rd{}, hits{}, inst{};
+    bool bufOk = mcops_newBuffer(dev, 3 * 3 * 4, MCOP_STORAGE_AUTO, &vt) == 0 &&
+                 mcops_newBuffer(dev, 32 * 3 * 4, MCOP_STORAGE_AUTO, &ro) == 0 &&
+                 mcops_newBuffer(dev, 32 * 3 * 4, MCOP_STORAGE_AUTO, &rd) == 0 &&
+                 mcops_newBuffer(dev, 32 * 8, MCOP_STORAGE_AUTO, &hits) == 0 &&
+                 mcops_newBuffer(dev, sizeof(MTLAccelerationStructureInstanceDescriptor),
+                                 MCOP_STORAGE_AUTO, &inst) == 0;
+    if (!bufOk) { check(false, "rt buffers created"); return; }
+    const float verts[9] = {0.0f, -0.5f, -0.5f,   0.6f, 0.5f, -0.5f,  -0.6f, 0.5f, -0.5f};
+    const float roBase[3] = {0.0f, 0.25f, 2.0f};
+    const float dirs[3][3] = {{0.0f, 0.0f, -1.0f},   // hit t=2.5
+                              {1.0f, 0.0f, -0.001f}, // miss
+                              {0.0f, 1.0f, 0.0f}};   // miss (upward)
+    float ro_data[32 * 3];
+    float rd_data[32 * 3];
+    for (uint32_t t = 0; t < 32; ++t) {
+        const uint32_t sky = t % 3;
+        for (int i = 0; i < 3; ++i) {
+            ro_data[t * 3 + i] = roBase[i];
+            rd_data[t * 3 + i] = dirs[sky][i];
+        }
+    }
+    mcops_writeBufferHost(&vt, verts, sizeof verts);
+    mcops_writeBufferHost(&ro, ro_data, sizeof ro_data);
+    mcops_writeBufferHost(&rd, rd_data, sizeof rd_data);
+
+    // BLAS: one triangle.
+    MTLAccelerationStructureTriangleGeometryDescriptor* g =
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor];
+    g.vertexBuffer = (__bridge id<MTLBuffer>)vt.handle;
+    g.vertexStride = 12;
+    g.triangleCount = 1;
+    MTLPrimitiveAccelerationStructureDescriptor* blasDesc =
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor];
+    blasDesc.geometryDescriptors = @[ g ];
+
+    // TLAS: one instance (identity transform) of that BLAS.
+    MTLAccelerationStructureInstanceDescriptor* idp =
+        (MTLAccelerationStructureInstanceDescriptor*)inst.cpuAddress;
+    MTLPackedFloat4x3 ident(MTLPackedFloat3(1, 0, 0), MTLPackedFloat3(0, 1, 0),
+                            MTLPackedFloat3(0, 0, 1), MTLPackedFloat3(0, 0, 0));
+    idp->transformationMatrix = ident;
+    idp->options = 0;
+    idp->mask = 1;
+    idp->intersectionFunctionTableOffset = 0;
+    idp->accelerationStructureIndex = 0;
+
+    MTLInstanceAccelerationStructureDescriptor* tlasDesc =
+        [MTLInstanceAccelerationStructureDescriptor descriptor];
+    tlasDesc.instanceDescriptorBuffer = (__bridge id<MTLBuffer>)inst.handle;
+    tlasDesc.instanceDescriptorStride = sizeof(MTLAccelerationStructureInstanceDescriptor);
+    tlasDesc.instanceCount = 1;
+    if (@available(ios 15.0, *)) {
+        tlasDesc.instanceDescriptorType =
+            MTLAccelerationStructureInstanceDescriptorTypeDefault;
+    }
+
+    // Sizes + allocations
+    MTLAccelerationStructureSizes bs = [devc accelerationStructureSizesWithDescriptor:blasDesc];
+    MTLAccelerationStructureSizes ts = [devc accelerationStructureSizesWithDescriptor:tlasDesc];
+    id<MTLAccelerationStructure> blas = [devc newAccelerationStructureWithSize:bs.accelerationStructureSize];
+    id<MTLAccelerationStructure> tlas = [devc newAccelerationStructureWithSize:ts.accelerationStructureSize];
+    id<MTLBuffer> scratchB = [devc newBufferWithLength:bs.buildScratchBufferSize
+                                              options:MTLResourceStorageModePrivate];
+    id<MTLBuffer> scratchT = [devc newBufferWithLength:ts.buildScratchBufferSize
+                                              options:MTLResourceStorageModePrivate];
+    if (!blas || !tlas || !scratchB || !scratchT) { check(false, "rt allocations"); return; }
+    check(true, "BLAS+TLAS allocations obtained");
+
+    MTLAccelerationStructureInstanceDescriptor instCopy = *idp;
+    tlasDesc.instancedAccelerationStructures = @[ blas ];
+
+    id<MTLCommandQueue> q = [devc newCommandQueue];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLAccelerationStructureCommandEncoder> ase = [cb accelerationStructureCommandEncoder];
+    [ase buildAccelerationStructure:blas descriptor:blasDesc scratchBuffer:scratchB scratchBufferOffset:0];
+    [ase buildAccelerationStructure:tlas descriptor:tlasDesc scratchBuffer:scratchT scratchBufferOffset:0];
+    [ase endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    check(cb.status == MTLCommandBufferStatusCompleted,
+          "acceleration structures built on-device");
+
+    id<MTLComputePipelineState> ps = [devc newComputePipelineStateWithFunction:fn error:nil];
+    if (!ps) { check(false, "rt compute pipeline"); return; }
+    const NSUInteger tgs = [ps maxTotalThreadsPerThreadgroup];
+    const NSUInteger nt = tgs < 32 ? tgs : 32;
+    id<MTLCommandQueue> q2 = [devc newCommandQueue];
+    id<MTLCommandBuffer> cb2 = [q2 commandBuffer];
+    id<MTLComputeCommandEncoder> ce = [cb2 computeCommandEncoder];
+    [ce setComputePipelineState:ps];
+    [ce setBuffer:(__bridge id<MTLBuffer>)ro.handle offset:0 atIndex:0];
+    [ce setBuffer:(__bridge id<MTLBuffer>)rd.handle offset:0 atIndex:1];
+    [ce setBuffer:(__bridge id<MTLBuffer>)hits.handle offset:0 atIndex:3];
+    [ce setAccelerationStructure:tlas atBufferIndex:2];
+    [ce dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(nt, 1, 1)];
+    [ce endEncoding];
+    [cb2 commit];
+    [cb2 waitUntilCompleted];
+    check(cb2.status == MTLCommandBufferStatusCompleted, "ray-query dispatch completed");
+
+    struct RtHit { float dist; uint iid; };
+    RtHit outv[32];
+    mcops_readBufferHost(&hits, outv, sizeof outv);
+    check(outv[0].dist > 2.4999f && outv[0].dist < 2.5001f,
+          "hit ray t=2.5 exact (got " + std::to_string(outv[0].dist) + ")");
+    check(outv[0].iid == 0, "hit instance_id == 0");
+    check(outv[1].dist > 1e30f && outv[2].dist > 1e30f, "miss rays report +inf distance");
+
+    mcops_freeBuffer(&vt);
+    mcops_freeBuffer(&ro);
+    mcops_freeBuffer(&rd);
+    mcops_freeBuffer(&hits);
+    mcops_freeBuffer(&inst);
 }
 
 static void testArgT1Block(void* dev) {
@@ -702,6 +885,7 @@ void MCRunTestSession(void) {
         runBlock("[F] frames-reuse", [&] { testFramesBlock(dev); });
         runBlock("[L] layer-selection", [&] { testLayeredBlock(dev); });
         runBlock("[A] tier1-argbufs", [&] { testArgT1Block(dev); });
+        runBlock("[R] ray-tracing", [&] { testRtBlock(dev, caps); });
         const auto g1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(g1 - g0).count();
         log("== [S] summary ==");
