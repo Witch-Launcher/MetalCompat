@@ -1,0 +1,17 @@
+# Build artifacts
+build/
+build-ios/
+build-*/
+*.o
+*.a
+
+# Generated outputs
+vertical_slice.ppm
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store

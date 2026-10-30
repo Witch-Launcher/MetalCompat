@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "verifiedOn": "2026-10-30",
+  "sources": [
+    "https://developer.apple.com/documentation/metal/mtlgpufamily (fetched 2026-10-30)",
+    "SDK header MTLDevice.h (iPhoneOS26.2.sdk): MTLGPUFamily raw values"
+  ],
+  "families": [
+    { "family": "Apple1",  "rawValue": 1001, "soc": ["A7"],  "minimumOs": null },
+    { "family": "Apple2",  "rawValue": 1002, "soc": ["A8"],  "minimumOs": null },
+    { "family": "Apple3",  "rawValue": 1003, "soc": ["A9", "A10"], "minimumOs": null },
+    { "family": "Apple4",  "rawValue": 1004, "soc": ["A11"], "minimumOs": null },
+    { "family": "Apple5",  "rawValue": 1005, "soc": ["A12"], "minimumOs": null },
+    { "family": "Apple6",  "rawValue": 1006, "soc": ["A13"], "minimumOs": null },
+    { "family": "Apple7",  "rawValue": 1007, "soc": ["A14", "M1"], "minimumOs": null },
+    { "family": "Apple8",  "rawValue": 1008, "soc": ["A15", "A16", "M2"], "minimumOs": null },
+    { "family": "Apple9",  "rawValue": 1009, "soc": ["A17", "M3", "M4"], "minimumOs": null },
+    { "family": "Apple10", "rawValue": 1010, "soc": ["newer generations"], "minimumOs": null },
+    { "family": "Mac2",    "rawValue": 2002, "soc": ["Intel Macs"], "minimumOs": null },
+    { "family": "Common1", "rawValue": 3001, "soc": [], "minimumOs": null },
+    { "family": "Common2", "rawValue": 3002, "soc": [], "minimumOs": null },
+    { "family": "Common3", "rawValue": 3003, "soc": [], "minimumOs": null },
+    { "family": "Metal3",  "rawValue": 5001, "soc": ["Apple7-class and newer"], "minimumOs": "iOS 16.0 / macOS 13.0" },
+    { "family": "Metal4",  "rawValue": 5002, "soc": ["MTL4-class devices"], "minimumOs": "iOS 26.0 / macOS 26.0" }
+  ],
+  "apiAvailability": [
+    { "api": "supportsFamily:",                    "iosSince": "13.0", "macSince": "10.15" },
+    { "api": "MTLHeap",                            "iosSince": "10.0", "macSince": "10.13" },
+    { "api": "MTLFence",                           "iosSince": "10.0", "macSince": "10.13" },
+    { "api": "MTLEvent",                           "iosSince": "12.0", "macSince": "10.14" },
+    { "api": "MTLIndirectCommandBuffer",           "iosSince": "12.0", "macSince": "10.14" },
+    { "api": "MTLAccelerationStructure",           "iosSince": "14.0", "macSince": "11.0" },
+    { "api": "MTLResidencySet",                    "iosSince": "18.0", "macSince": "15.0" },
+    { "api": "MetalFX (MTLFX*)",                   "iosSince": "16.0", "macSince": "13.0" },
+    { "api": "MTL4 headers (all)",                 "iosSince": "26.0", "macSince": "26.0" }
+  ],
+  "openQuestions": [
+    { "id": "R-1", "question": "Tessellation hardware gate on Apple3 (A9)" },
+    { "id": "R-2", "question": "Legacy mesh path on iOS 14 devices" },
+    { "id": "R-3", "question": "Argument buffer tier returned by A9" },
+    { "id": "R-4", "question": "MSL/AIR bundle versions on A9 + iOS 14" },
+    { "id": "R-5", "question": "MTLCaptureManager availability in test environments" },
+    { "id": "R-6", "question": "Feature requirement tables needing further official citations" }
+  ],
+  "deviceMatrix": {
+    "planned": ["A9", "A10", "A11", "A12", "A13", "A14+"],
+    "validatedPhysical": []
+  }
+}
