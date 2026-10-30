@@ -20,7 +20,10 @@
 namespace {
 
 void fillOut(MCOpBuffer* out, id<MTLBuffer> buf) {
-    out->handle = (__bridge void*)buf;
+    // The +1 from newBuffer* lives only in this ARC local; transfer it into
+    // the C handle, or it dangles the moment this function returns (the A11
+    // device crash: pool drain released the already-freed buffer).
+    out->handle = (__bridge_retained void*)buf;
     out->length = buf.length;
     out->cpuAddress = buf.contents; // non-nil for Shared/Managed; nil for Private
 }
