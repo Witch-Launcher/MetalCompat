@@ -1048,6 +1048,19 @@ If A9 physical hardware is unavailable, implement tests that can run in the curr
 
 ## Changelog
 
+### 0.2.1 — 2026-10-30
+
+- M4 legacy ops core implemented and host-tested (buffers/texture staging/
+  sampler/compute dispatch, bounded staging reuse); availability-correctness
+  fixes recorded in docs/IMPLEMENTATION_STATUS.md (legacy blit selectors,
+  MTLGPUFamilyMetal3 availability guards, ARC policy).
+- CI added (GitHub Actions, macos-14 host + iOS cross-build, zero-warning gate).
+- First physical-device session planned on iPhone 8 Plus (A11/Apple4);
+  A9 silicon evidence remains REQUIRED and cannot be substituted by family
+  inference (docs/DEVICE_TEST_SESSION.md).
+- MoltenVK/TGLMT track documented (docs/MOLTENVK_INTEGRATION.md) per D-009;
+  MetalCompat remains standalone.
+
 ### 0.2.0 — 2026-10-29
 
 - Replaced the vague wrapper/emulator framing with a hybrid layered runtime.

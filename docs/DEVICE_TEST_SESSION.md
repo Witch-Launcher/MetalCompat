@@ -1,14 +1,15 @@
-# Device Test Session — A10/A11 (Apple3/Apple4 validation)
+# Device Test Session — iPhone 8 Plus (A11/Apple4) first, then A10/A9
 
-> Goal: turn the Apple3-family row (A9 shares this family with A10) from
-> `PENDING`/`UNKNOWN` into **physical-validated** evidence, and start the
-> Apple4 row. An A10 session physically validates the *family*; the separate
-> A9-silicon device column stays PENDING until an A9 handset is available.
+> Agreed plan (2026-10-30): the first physical session runs on the user's
+> **iPhone 8 Plus (A11 = Apple4)**. It starts the Apple4 family row from
+> `PENDING` toward `physical-validated`. The Apple3 row (A9/A10) stays
+> `PENDING` until an A10/A9 handset session — A9 silicon evidence is still
+> REQUIRED for the core claim and is not substituted by family inference.
 
 ## 0. Requirements
 
-- iPhone 7/8/X (A10/A11) running iOS 14.x or 15.x (both above the 14 baseline —
-  record the exact OS version per run).
+- iPhone 8 Plus (A11), any iOS 14+ (record exact OS version per run —
+  on iOS 16+ the device additionally advertises MTLGPUFamilyMetal3).
 - Mac host: this repo, Xcode 26.3.
 - Apple Developer account for device signing.
 
@@ -38,28 +39,31 @@ Signing & Capabilities → check "Automatically manage signing" + your team.
 | Item | Where it comes from |
 |---|---|
 | Device model + OS build | `Settings > General > About` (+ console header line from the app) |
-| SoC/GPU family evidence | app line `families: ...` (expect `Apple3,...` on A10) |
+| SoC/GPU family evidence | app line `families: ...` (A11 expects `Apple4,...`) |
 | Capability limits | app lines for maxBufferLength, threadgroups, tiers |
 | Test date | filename + commit hash note |
 | Result + logs | the two txt files above |
 
-## 4. Expected console landmarks (A10, iOS 14/15)
+## 4. Expected console landmarks (A11, iOS 14/15)
 
 ```text
-families          : Apple1,Apple2,Apple3,Common1,Common2,Common3   ← must include Apple3
+families          : Apple1,Apple2,Apple3,Apple4,Common1,Common2,Common3 ← must include Apple4
 metal4 (family 5002) : no
-PLAN mtl4.queue   -> REFUSED UnavailableOs ...                     ← D-008 enforced on hardware
-PLAN pipe.render  -> Native ...                                    ← legacy slice usable
+PLAN mtl4.queue   -> REFUSED UnavailableOs ...                      ← D-008 enforced on hardware
+PLAN pipe.render  -> Native ...                                     ← legacy slice usable
 [BASICRENDER] deterministic frame matches reference (≥97% gate)     ← M3 gate on-device
 ```
+
+iOS 16+ on A11 adds: `metal3 (family 5001) : yes` (Metal3 runtime availability
+row lands the same way).
 
 If any landmark differs → STOP, open an issue, do not patch the registry by
 hand (change protocol §0).
 
 ## 5. After the session (agent's job, on receiving logs)
 
-1. Update `docs/TESTING.md` device matrix: Apple3 row → `physical-validated via
-   A10 (iPhone 7, iOS <ver>, date, logs)`.
+1. Update `docs/TESTING.md` device matrix: Apple4 row → `physical-validated via
+   A11 (iPhone 8 Plus, iOS <ver>, date, logs)`.
 2. Fill `registry/gpu_capabilities.json` `deviceMatrix.validatedPhysical`.
 3. Resolve open questions that the logs answer:
    R-1 (tessellation gate — needs a follow-up tessellation probe run),
@@ -67,8 +71,11 @@ hand (change protocol §0).
    R-4 (MSL version actually accepted — the BasicRender compile result shows it).
 4. Re-run registry validator + unit tests; commit with the logs.
 
-## 6. Session 2 (later, after family rows are in)
+## 6. Session 2+ (later, after the A11 session)
 
 - Tessellation probe (R-1): small app creating a tessellation render pipeline
-  on A10 — resolves the Apple3 hardware gate row.
-- A9 handset whenever available: same two apps; moves the A9 silicon column.
+  on A11 — resolves the Apple4 hardware gate row (A11 supports the API; the
+  hardware gate row governs).
+- A10 (iPhone 7/X): starts the Apple3 family row physical validation.
+- A9 handset whenever available: same two apps; moves the A9 silicon column,
+  the SPEC's core target.

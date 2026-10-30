@@ -9,9 +9,14 @@ validation.**
 | Family | SoC | Physical validation | Notes |
 |---|---|---|---|
 | Apple3 | A9, A10 | **PENDING** | primary target; no hardware accessible in the current session |
-| Apple4 (A11) … Apple7 (A14/M1) | — | PENDING | planned matrix |
+| Apple4 (A11) | A11 | **PENDING — planned first session** | agreed device: user's iPhone 8 Plus (see docs/DEVICE_TEST_SESSION.md) |
+| Apple4 … Apple7 (A14/M1) | — | PENDING | planned matrix |
 | Apple8+ | — | PENDING | secondary |
 | Mac2 (Intel) | host iMac20,1 (Intel UHD 630) | **TESTED (host)** | macOS 15.7.7, Xcode 26.3 / iOS SDK 26.2 |
+
+Planned device session order (agreed 2026-10-30): iPhone 8 Plus (A11/Apple4)
+first — starts the Apple4 row; A10/A9 later — A9 silicon evidence stays
+REQUIRED for the core claim and is not substituted by family inference.
 
 Environment recorded 2026-10-30: macOS 15.7.7 (24G720); Xcode 26.3 (17C529);
 iOS SDK 26.2; Metal toolchain 32023.864; cmake 4.4.3; ninja; Apple clang 17.

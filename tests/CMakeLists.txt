@@ -4,6 +4,14 @@ target_include_directories(MC_UnitTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(MC_UnitTests PRIVATE MetalCompat)
 target_compile_options(MC_UnitTests PRIVATE -Wall -Wextra)
 
+# M4 integration suite: real Metal ops (buffers/textures/compute/hazards).
+add_executable(MC_IntegrationTests Rendering/IntegrationTests.mm)
+target_include_directories(MC_IntegrationTests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(MC_IntegrationTests PRIVATE MetalCompat)
+target_compile_options(MC_IntegrationTests PRIVATE -Wall -Wextra)
+
+add_test(NAME integration COMMAND MC_IntegrationTests)
+
 # Stage the real registry next to the unit test binary.
 add_custom_command(TARGET MC_UnitTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

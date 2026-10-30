@@ -7,6 +7,7 @@ add_library(MetalCompat STATIC
     Planner/ExecutionPlanner.cpp
     CPU/Diagnostics/Diag.cpp
     Backends/LegacyMetal/metal_bridge.mm
+    Backends/LegacyMetal/legacy_ops.mm
 )
 
 target_include_directories(MetalCompat

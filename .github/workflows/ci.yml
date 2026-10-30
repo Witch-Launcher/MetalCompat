@@ -1,0 +1,44 @@
+# MetalCompat CI — public CI, no physical-device claims (M0 §8 rule).
+# macos-14 runner = Intel? No: macos-14 is ARM (M1) — fine: Metal-capable,
+# supportsFamily(MTLGPUFamilyApple7) is therefore available, which exercises
+# the planner's Apple-gating paths; A9 2026-physical validation stays a
+# separate signed session (docs/DEVICE_TEST_SESSION.md), never CI-substituted.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  host-mac:
+    name: macOS build + tests + validator
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: host-mac
+      - name: Configure (host macOS)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+      - name: Build (warnings as observed; zero-warning gate)
+        run: cmake --build build 2>&1 | tee build.log; test "$(grep -cE 'warning:|error:' build.log)" = 0
+      - name: CTest (unit + integration + vertical slice)
+        run: ctest --test-dir build --output-on-failure
+      - name: Registry validator
+        run: ./build/tools/APIRegistryValidator/MC_RegistryValidator registry/metal_api_registry.json registry/gpu_capabilities.json
+      - name: Capability report artifact
+        run: ./build/examples/CapabilityReport/MC_CapabilityReport > capability-report.txt && cat capability-report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capability-report
+          path: capability-report.txt
+
+  cross-ios:
+    name: iOS device cross-build (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (iOS cross)
+        run: cmake -S . -B build-ios -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build (zero-warning gate)
+        run: cmake --build build-ios 2>&1 | tee build-ios.log; test "$(grep -cE 'warning:|error:' build-ios.log)" = 0

@@ -61,11 +61,26 @@ int mcmtl_probeDefaultDevice(mc::DeviceCaps* out) noexcept {
         // Metal4 gate: enum value itself is API_AVAILABLE(macos 26 / ios 26)
         // (verified in SDK 26.2 header MTLDevice.h) — guard to keep older OS
         // deployment targets clean (D-008: Metal4 stays opt-in and separate).
-        caps.familySupport[14] = [dev supportsFamily:MTLGPUFamilyMetal3] ? 1 : 0;
+        // Metal3/Metal4 family slots: constant availability varies by SDK —
+        // the enum MTLGPUFamilyMetal3 needs SDK ≥ iOS 16 / macOS 13; Metal4
+        // needs SDK ≥ iOS 26 / macOS 26. Guard on compile-time SDK floor so
+        // older Xcodes (e.g. CI images) still compile without inventing values.
+        caps.familySupport[14] = 0;
         caps.familySupport[15] = 0;
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 160000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000)
+        // The constant itself is API_AVAILABLE(macos(13.0), ios(16.0))
+        // (verified MTLDevice.h:212) — needs the runtime availability guard.
+        if (@available(macos 13.0, ios 16.0, *)) {
+            caps.familySupport[14] = [dev supportsFamily:MTLGPUFamilyMetal3] ? 1 : 0;
+        }
+#endif
+#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000) || \
+    (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000)
         if (@available(macos 26.0, ios 26.0, *)) {
             caps.familySupport[15] = [dev supportsFamily:MTLGPUFamilyMetal4] ? 1 : 0;
         }
+#endif
 
         caps.appleGpu =
             caps.familySupport[0] || caps.familySupport[1] || caps.familySupport[2] ||

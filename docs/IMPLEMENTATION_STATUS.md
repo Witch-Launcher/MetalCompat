@@ -1,4 +1,4 @@
-# MetalCompat — IMPLEMENTATION STATUS (v0.2.0, 2026-10-30)
+# MetalCompat — IMPLEMENTATION STATUS (v0.2.1, 2026-10-30)
 
 Honest states per SPEC §14.4 vocabulary: `implemented / compiled / unit-tested /
 host-tested / physical-device-tested`. Nothing below claims physical-device
@@ -24,6 +24,23 @@ testing on A9 — there is no A9 in the current environment.
 | Diagnostics ring (opt-in) | `CPU/Diagnostics/*` | unit-tested |
 | LegacyMetal backend (device + pipeline) | backend + `examples/BasicRender` | host-tested |
 
+## Legacy ops core (M4 scope) — implemented, host-tested
+
+`src/Backends/LegacyMetal/legacy_ops.{h,mm}`: deterministic op set (AUTO/PRIVATE
+storage, staged texture upload/download via verified blit selectors, sampler,
+runtime-MSL library + compute pipeline, 1-D dispatch bounded by the real
+pipeline's `maxTotalThreadsPerThreadgroup`). ARC-mandatory (`CMAKE_OBJCXX_FLAGS`
+set so both Ninja and the Xcode generator honor it). New verified availability
+corrections (SDK 26.2):
+
+- Blit encoders use the *legacy* source-first selectors:
+  `copyFromBuffer:...:sourceSize:toTexture:...` and
+  `copyFromTexture:...:toBuffer:...options:` (MTLBlitCommandEncoder.h:70-92);
+  the MTL4-style `copyTextureTo*` names do not exist on the legacy class.
+- `MTLGPUFamilyMetal3` is `API_AVAILABLE(macos(13.0), ios(16.0))`
+  (MTLDevice.h:212) — runtime `@available` guard + compile-time SDK-max guard
+  so older-Xcode CI SDKs still compile.
+
 ## Vertical slice (M3 scope) — implemented, host-tested
 
 `examples/BasicRender`: device → registry → planner → LegacyMetal pipeline →
@@ -35,10 +52,12 @@ Pipeline creation via `MTLCompileOptions` (MSL 2.3 ceiling documented for iOS 14
 | Item | Result |
 |---|---|
 | macOS Ninja build (x86_64 host) | 0 errors, 0 warnings |
-| `ctest` | 2/2 pass (unit + render_vertical_slice) |
+| `ctest` | 3/3 pass (unit + integration + render_vertical_slice) |
 | Unit tests | 47/47 checks pass |
+| Integration tests (`MC_IntegrationTests`) | 41/41 checks pass (buffer/texture/GPU-copy/compute/3-frame staging reuse) |
 | iOS cross-build (arm64, iphoneos SDK 26.2, deployment **14.0**) | 0 errors, 0 warnings; all targets compile |
-| Real-device run | **Not possible in this environment** |
+| iOS Xcode-project build (`MC_IntegrationTests`, Release) | BUILD SUCCEEDED (project-level 'duplicate -lobjc' ld notice is a known Xcode 26 generator artifact, not a source warning) |
+| Real-device run | **Not possible in this environment** — first session planned on user's iPhone 8 Plus (A11/Apple4), docs/DEVICE_TEST_SESSION.md |
 
 ## Availability corrections discovered during implementation (recorded)
 
@@ -62,9 +81,9 @@ Pipeline creation via `MTLCompileOptions` (MSL 2.3 ceiling documented for iOS 14
 
 ## Next smallest tasks (in order)
 
-1. Run validator + tests in CI (GitHub Actions macOS runner) — repo remote now
-   available (`Witch-Launcher/MetalCompat`).
-2. A9 half-day validation session (device matrix PRO/§12.1): fills `UNKNOWN`s
-   R-1..R-5 and pins the registry rows that are currently OS-verified only.
-3. M4 core legacy op coverage (buffers/textures hazards, frames-in-flight tests).
-4. M5 first translation record (choose one feature, write the §2 record first).
+1. GitHub Actions CI (added: `.github/workflows/ci.yml` — macos-14 host
+   build+ctest+validator+report artifact, iOS device cross-build; zero-warning
+   gate enforced by grepping the build logs).
+2. Physical session on iPhone 8 Plus (A11/Apple4) — first validated device row
+   (runbook: docs/DEVICE_TEST_SESSION.md).
+3. M5 first translation record (choose one feature, write the §2 record first).
