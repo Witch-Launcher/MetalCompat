@@ -26,6 +26,10 @@ target_compile_options(MetalCompat PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-declarations>
 )
 
+# The Xcode generator ignored CMAKE_OBJCXX_FLAGS (-fobjc-arc): the .mm backend
+# is ARC-clean and mixing generators must not change refcounting semantics.
+set_target_properties(MetalCompat PROPERTIES XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC "YES")
+
 # Backend requires Metal + Foundation. Static lib exports link requirements.
 target_link_libraries(MetalCompat PUBLIC
     "-framework Metal"

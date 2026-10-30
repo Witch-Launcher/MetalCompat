@@ -29,6 +29,8 @@ endif()
 
 add_subdirectory(src)
 add_subdirectory(tools/APIRegistryValidator)
+# iOS-only on-device test app (no-ops on other toolchains).
+add_subdirectory(apps)
 if(MC_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
