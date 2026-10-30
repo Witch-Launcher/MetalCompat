@@ -93,6 +93,7 @@ kernel void vec_add(const device float* a [[buffer(0)]],
 static std::mutex g_logMutex;
 static std::vector<std::string> g_logLines;
 static int g_checks = 0, g_failed = 0;
+static FILE* g_logFile = nullptr;
 
 static std::string nowStamp() {
     using Steady = std::chrono::steady_clock;
@@ -103,11 +104,29 @@ static std::string nowStamp() {
     return buf;
 }
 
+static void openLogFile() {
+    if (g_logFile) return;
+    NSArray* dirs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                                       NSUserDomainMask, YES);
+    NSString* path = [dirs.firstObject stringByAppendingPathComponent:
+                                         @"MC_TEST_LOG.txt"];
+    g_logFile = fopen(path.fileSystemRepresentation, "w");
+    setvbuf(g_logFile, nullptr, _IONBF, 0);
+    NSLog(@"MC-LOGFILE %@", path);
+}
+
 static void log(const std::string& line) {
     const std::string stamped = nowStamp() + line;
-    std::lock_guard<std::mutex> lk(g_logMutex);
-    if (g_logLines.size() > 4000) g_logLines.erase(g_logLines.begin());
-    g_logLines.push_back(stamped);
+    // Buffer first (used by screen/share), then crashes away: file+NSLog.
+    {
+        std::lock_guard<std::mutex> lk(g_logMutex);
+        if (g_logLines.size() > 4000) g_logLines.erase(g_logLines.begin());
+        g_logLines.push_back(stamped);
+    }
+    if (g_logFile) {
+        fprintf(g_logFile, "%s\n", stamped.c_str());
+        fflush(g_logFile);
+    }
     NSLog(@"MC-LOG %@", [NSString stringWithUTF8String:stamped.c_str()]);
 }
 
@@ -127,6 +146,22 @@ static std::string familyLabelOf(int raw) {
 
 // Full test session; defined near the bottom (asynchronous, background queue).
 extern "C" void MCRunTestSession(void);
+
+// Per-block safety fence: one @autoreleasepool per block (crash at its drain
+// pins the responsible block) + boundary logs + ObjC-exception capture.
+template <typename T>
+static void runBlock(const char* name, T&& fn) {
+    log(std::string("[enter] ") + name);
+    @try {
+        @autoreleasepool {
+            fn();
+        }
+    } @catch (NSException* ex) {
+        log(std::string("[EXC] ") + name + ": " +
+            std::string(ex.reason ? ex.reason.UTF8String : "unknown reason"));
+    }
+    log(std::string("[leave] ") + name);
+}
 
 // ---------------------------------------------------------------------------
 // Run screen: toolbar (rerun/share) + monospaced scrolling log.
@@ -651,21 +686,22 @@ extern "C" void MCRunTestSession(void);
 void MCRunTestSession(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         const auto g0 = std::chrono::steady_clock::now();
+        openLogFile();
+        log("MCRenderTest session v1.1 (built " __DATE__ " " __TIME__ ")");
         mc::DeviceCaps caps;
         const int rc = mcmtl_probeDefaultDevice(&caps);
         if (rc != 0) {
             log("FATAL: no Metal device (rc=" + std::to_string(rc) + ")");
             return;
         }
-        log("MCRenderTest — MetalCompat on-device render session (built " __DATE__ ")");
         void* dev = mcmtl_deviceHandle();
-        testDeviceBlock(caps);
-        testBufferBlock(dev);
-        testTextureBlock(dev);
-        testComputeBlock(dev, caps);
-        testFramesBlock(dev);
-        testLayeredBlock(dev);
-        testArgT1Block(dev);
+        runBlock("[D] device-summary", [&] { testDeviceBlock(caps); });
+        runBlock("[B] buffers", [&] { testBufferBlock(dev); });
+        runBlock("[T] texture-staging", [&] { testTextureBlock(dev); });
+        runBlock("[C] compute", [&] { testComputeBlock(dev, caps); });
+        runBlock("[F] frames-reuse", [&] { testFramesBlock(dev); });
+        runBlock("[L] layer-selection", [&] { testLayeredBlock(dev); });
+        runBlock("[A] tier1-argbufs", [&] { testArgT1Block(dev); });
         const auto g1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(g1 - g0).count();
         log("== [S] summary ==");
@@ -688,6 +724,32 @@ static void MCStartUiRefreshTimer(RunScreen* vc) {
     objc_setAssociatedObject(vc, "runTimer", timer, OBJC_ASSOCIATION_RETAIN);
 }
 
+static void MCCrashDump(int sig) {
+    if (g_logFile) {
+        // Diagnostics app: buffered fprintf in a dying process is acceptable.
+        fprintf(g_logFile, "\n! CRASHED during the test after this line (signal=%d)\n",
+                sig);
+        fclose(g_logFile);
+        g_logFile = nullptr;
+    }
+    _exit(0);
+}
+
+static void MCUncaughtHandler(NSException* ex) {
+    log("[EXC-HANDLER] " +
+        std::string(ex.name ? ex.name.UTF8String : "?") + ": " +
+        std::string(ex.reason ? ex.reason.UTF8String : "no reason"));
+    if (g_logFile) fclose(g_logFile);
+    g_logFile = nullptr;
+}
+
+static void MCInstallCrashHooks() {
+    signal(SIGSEGV, MCCrashDump);
+    signal(SIGABRT, MCCrashDump);
+    signal(SIGBUS, MCCrashDump);
+    NSSetUncaughtExceptionHandler(&MCUncaughtHandler);
+}
+
 // ---------------------------------------------------------------------------
 // AppDelegate
 // ---------------------------------------------------------------------------
@@ -705,6 +767,7 @@ static void MCStartUiRefreshTimer(RunScreen* vc) {
     RunScreen* vc = [RunScreen new];
     _window.rootViewController = vc;
     [_window makeKeyAndVisible];
+    MCInstallCrashHooks();
     MCStartUiRefreshTimer(vc);
     MCRunTestSession();
     return YES;
