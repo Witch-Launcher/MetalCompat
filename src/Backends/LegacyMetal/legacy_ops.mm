@@ -8,8 +8,10 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 
+#include "backend_common.h"
 #include "legacy_ops.h"
 
+#include <cstdio>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -17,45 +19,10 @@
 // ---------------------------------------------------------------------------
 namespace {
 
-id<MTLDevice> devOf(void* opaque) { return (__bridge id<MTLDevice>)opaque; }
-
-// Host-visible storage: Shared on unified memory; Managed only on non-unified
-// macOS (Managed is API_UNAVAILABLE(ios), verified MTLResource.h:177).
-MTLResourceOptions hostVisibleOptions(id<MTLDevice> dev) {
-#if TARGET_OS_OSX
-    bool unified = true;
-    if (@available(macos 10.15, *)) unified = dev.hasUnifiedMemory ? YES : NO;
-    return unified ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
-#else
-    (void)dev;
-    return MTLResourceStorageModeShared;
-#endif
-}
-
-#if TARGET_OS_OSX
-bool needsManagedSync(id<MTLDevice> dev) {
-    bool unified = true;
-    if (@available(macos 10.15, *)) unified = dev.hasUnifiedMemory ? YES : NO;
-    return !unified;
-}
-#endif
-
 void fillOut(MCOpBuffer* out, id<MTLBuffer> buf) {
     out->handle = (__bridge void*)buf;
     out->length = buf.length;
     out->cpuAddress = buf.contents; // non-nil for Shared/Managed; nil for Private
-}
-
-int runAndWait(id<MTLDevice> dev, void (^build)(id<MTLCommandBuffer>)) {
-    id<MTLCommandQueue> q = [dev newCommandQueue];
-    if (!q) return 2;
-    id<MTLCommandBuffer> cb = [q commandBuffer];
-    if (!cb) return 3;
-    build(cb);
-    [cb commit];
-    [cb waitUntilCompleted];
-    if (cb.status != MTLCommandBufferStatusCompleted) return 4;
-    return 0;
 }
 
 } // namespace
@@ -244,6 +211,19 @@ void mcops_freeSampler(void* samplerHandle) noexcept {
 // ---------------------------------------------------------------------------
 int mcops_compileLibrary(void* device, const char* mslSource,
                          void** outLibraryHandle) noexcept {
+    // Default floor keeps legacy paths on the language the OS baseline allows;
+    // the explicit-version variant lives in mcops_compileLibraryEx.
+    int ver = 0;
+    if (@available(ios 14.0, macos 11.0, *))
+        ver = 230; // MTLLanguageVersion2_3 (iOS 14 ceiling, registry shader.msl23)
+    else
+        ver = 220; // MTLLanguageVersion2_2 (iOS 13 ceiling)
+    return mcops_compileLibraryEx(device, mslSource, ver, nullptr, 0, outLibraryHandle);
+}
+
+int mcops_compileLibraryEx(void* device, const char* mslSource, int mslLangVersion,
+                           char* errBuf, uint32_t errBufLen,
+                           void** outLibraryHandle) noexcept {
     if (!device || !mslSource || !outLibraryHandle) return 1;
     *outLibraryHandle = nullptr;
     @autoreleasepool {
@@ -251,14 +231,26 @@ int mcops_compileLibrary(void* device, const char* mslSource,
         NSString* src = [NSString stringWithCString:mslSource
                                            encoding:NSUTF8StringEncoding];
         MTLCompileOptions* opts = [MTLCompileOptions new];
-        if (@available(ios 14.0, macos 11.0, *)) {
-            opts.languageVersion = MTLLanguageVersion2_3;
-        } else if (@available(ios 13.0, macos 10.15, *)) {
-            opts.languageVersion = MTLLanguageVersion2_2;
+        switch (mslLangVersion) {
+            case 220: opts.languageVersion = MTLLanguageVersion2_2; break;
+            case 230: opts.languageVersion = MTLLanguageVersion2_3; break;
+            default:
+                if (errBuf && errBufLen)
+                    snprintf(errBuf, errBufLen, "unsupported MSL version %d", mslLangVersion);
+                return 1;
         }
         NSError* err = nil;
         id<MTLLibrary> lib = [dev newLibraryWithSource:src options:opts error:&err];
-        if (!lib) return 2;
+        if (!lib) {
+            if (errBuf && errBufLen) {
+                const char* msg = err.localizedDescription.UTF8String
+                                      ? err.localizedDescription.UTF8String : "unknown compile error";
+                // No shader text or symbol content leaves this path; the
+                // diagnostics come from the compiler itself (public API error).
+                snprintf(errBuf, errBufLen, "%s", msg);
+            }
+            return 2;
+        }
         *outLibraryHandle = (__bridge_retained void*)lib;
     }
     return 0;
@@ -300,6 +292,66 @@ void mcops_freeComputePipeline(void* pipelineHandle) noexcept {
             (__bridge_transfer id<MTLComputePipelineState>)pipelineHandle;
         (void)ps;
     }
+}
+
+int mcops_newRenderPipeline(void* device, const void* libraryHandle,
+                            const char* vsName, const char* fsName,
+                            int layered, void** outPipelineHandle) noexcept {
+    if (!device || !libraryHandle || !vsName || !fsName || !outPipelineHandle) return 1;
+    *outPipelineHandle = nullptr;
+    @autoreleasepool {
+        id<MTLDevice> dev = devOf(device);
+        id<MTLLibrary> lib = (__bridge id<MTLLibrary>)libraryHandle;
+        id<MTLFunction> vf = [lib newFunctionWithName:
+                                  [NSString stringWithCString:vsName
+                                                     encoding:NSUTF8StringEncoding]];
+        id<MTLFunction> ff = [lib newFunctionWithName:
+                                  [NSString stringWithCString:fsName
+                                                     encoding:NSUTF8StringEncoding]];
+        if (!vf || !ff) return 2;
+        MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = vf;
+        pd.fragmentFunction = ff;
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        if (layered)
+            pd.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+        NSError* err = nil;
+        id<MTLRenderPipelineState> ps =
+            [dev newRenderPipelineStateWithDescriptor:pd error:&err];
+        if (!ps) return 2;
+        *outPipelineHandle = (__bridge_retained void*)ps;
+    }
+    return 0;
+}
+
+void mcops_freeRenderPipeline(void* pipelineHandle) noexcept {
+    if (!pipelineHandle) return;
+    @autoreleasepool {
+        id<MTLRenderPipelineState> ps =
+            (__bridge_transfer id<MTLRenderPipelineState>)pipelineHandle;
+        (void)ps;
+    }
+}
+
+int mcops_newTextureArray(void* device, uint32_t w, uint32_t h, uint32_t layers,
+                          void** outTextureHandle) noexcept {
+    if (!device || !w || !h || !layers || !outTextureHandle) return 1;
+    *outTextureHandle = nullptr;
+    @autoreleasepool {
+        id<MTLDevice> dev = devOf(device);
+        MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+        td.textureType = MTLTextureType2DArray;
+        td.width = w;
+        td.height = h;
+        td.arrayLength = layers;
+        td.pixelFormat = MTLPixelFormatRGBA8Unorm;
+        td.storageMode = MTLStorageModePrivate;
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        id<MTLTexture> tex = [dev newTextureWithDescriptor:td];
+        if (!tex) return 2;
+        *outTextureHandle = (__bridge_retained void*)tex;
+    }
+    return 0;
 }
 
 int mcops_dispatchCompute(void* device, const void* pipelineHandle,

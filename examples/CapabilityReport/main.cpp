@@ -117,8 +117,12 @@ int main() {
     std::printf("registry ok             : %zu features, %zu gpu families (dir: %s)\n",
                 reg.features().size(), g.families.size(), regDir.c_str());
 
-    // 3. Planner decisions across the inventory.
-    ExecutionPlanner planner(reg, d.caps, ValidationLevel::Diagnostic);
+    // 3. Planner decisions across the inventory. The fallback catalog mirrors
+    // what the backend really ships (render_layered.mm provides per-slice ops);
+    // a decision may only be FallbackTranslation when the fallback is listed.
+    PlannerConfig cfg;
+    cfg.provisionedFallbackIds.push_back("render.layered");
+    ExecutionPlanner planner(reg, d.caps, ValidationLevel::Diagnostic, cfg);
     for (const auto& rec : reg.features()) {
         Decision dec;
         Error pe = planner.plan(rec.id, dec);

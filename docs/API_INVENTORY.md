@@ -63,6 +63,10 @@ copy-architecture matters for future native-backend routing, not for the iOS 14 
 | res.acceleration | `MTLAccelerationStructure`, `newAccelerationStructureWithDescriptor:` | **iOS 14.0+** (macOS 11.0+) | RT hardware (Apple7 per docs) — A9 expected UNSUPPORTED, pending runtime probe |
 | sync.event | `MTLEvent` | iOS 12.0+ | NATIVE |
 | sync.fence | `MTLFence` | iOS 10.0+ | NATIVE |
+| render.layered | `MTLRenderPassDescriptor.renderTargetArrayLength` | iOS 12.0+ / macOS 10.11+ | Apple5+ or any macOS-family GPU (official article) | PARTIAL + typed fallback (`[gateApple5orMac2]`) |
+| res.textureView | `newTextureViewWithPixelFormat:textureType:levels:slices:` | iOS 9.0+ / macOS 10.11+ | none | NATIVE (slice baseline for the translation) |
+| trans.mtl4.argtable.tier1 | `MTLArgumentDescriptor` + `newArgumentEncoderWithArguments:` | iOS 11.0+ / macOS 10.13+ | runtime gate `argumentBuffersSupport >= Tier1` | PARTIAL prototype, host-verified classic==tier1 |
+| cmd.renderBarrierStageLimit | `MTLRenderCommandEncoder.memoryBarrier(...)` | iOS 14.0+ / macOS 11.0+ | Apple3–Apple10 refuse .fragment/.tile `after` & renderTargets scope (table footnote 3) | UNSUPPORTED (split-pass mapping documented) |
 | sync.dispatchBarrierStyle | header-defined per-command barrier styles (SDK 26.2) | newer OS | PARTIAL/UNKNOWN on iOS 14 — map to fences/events per M5 design |
 
 ### A.4 Related frameworks (tracked, not merged)

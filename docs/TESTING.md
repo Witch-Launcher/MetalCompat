@@ -66,3 +66,20 @@ Required before any Apple-family claim is PHYSICAL-VALIDATED:
 5. R-1 (tessellation gate) and R-3 (argument tier) probes against the registry.
 
 No simulator run is accepted as evidence for these items.
+
+## M5–M8 test additions (2026-10-30)
+
+| Suite | Coverage | Result |
+|---|---|---|
+| unit (`MC_UnitTests`) | M6 subsystem: hash determinism, define validation (empty/digit/backslash/control/overlong), canonical sort+dup reject, emit-order, key-text stability, LRU behavior (hit/miss/pinned/eviction/double-release/refuse-on-compile-failure). M5 planner: [gateApple5orMac2] token decisions (A9+FallbackTranslation when provisioned, refusal when not, Mac2→Native), cross-file feature-gate validation | 68/68 checks |
+| integration (`MC_IntegrationTests`) | M5: 2DArray(4) render — native path vs CPU reference (±1 lsb/ch) and fallback path ditto; per-slice download; gate-refusal on non-layer hw returns 6 without touching state. M7: tier-1 prototype descriptors→encoder→argbuffer→kernel; classic binding vs tier-1 byte-equal | all pass |
+| perf (`MC_PerfHarness`, manual) | M8 numbers (docs/PERFORMANCE.md) | pass |
+| validator | new blocks validated (gate tokens machine-form, limits positive ints, cross-file gating) | pass |
+
+Discovered & fixed by tests (2026-10-30):
+- fragment constant-buffer bindings must be 32-byte aligned (`setFragmentBuffer:
+  offset:`) — per-slice uniform slots are 32-byte-recorded.
+- `copyFromTexture→toBuffer` slice copies require bytesPerImage=W*H*4.
+- pipelines used with layer selection must declare (triangle) topology class.
+- [[pixel_coord]] does not exist; fragment pixel center coords come
+  from the stage-in `[[position]]` payload.

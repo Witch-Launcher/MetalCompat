@@ -190,6 +190,57 @@ Error FeatureRegistry::loadGpuCapabilities(const std::string& path, GpuCapabilit
         }
         out.families.push_back(std::move(g));
     }
+
+    // OPTIONAL blocks: machine gates + Apple3 limits (validated when present).
+    if (const json::Value* gates = root->find("featureGates");
+        gates && gates->type == json::Value::Type::Array) {
+        for (size_t i = 0; i < gates->size(); ++i) {
+            const json::Value* gt = gates->at(i);
+            GpuCapabilitiesTable::FeatureGate g;
+            g.feature = strOf(gt->find("feature"));
+            g.gateToken = strOf(gt->find("gateToken"));
+            g.basis = strOf(gt->find("basis"));
+            if (g.feature.empty() || g.gateToken.empty())
+                return Error{ErrorCode::InvalidRegistry, g.feature,
+                             "featureGates[" + std::to_string(i) + "]: missing feature/gateToken"};
+            if (g.gateToken.front() != '[' || g.gateToken.back() != ']' ||
+                g.gateToken.find(' ') != std::string::npos)
+                return Error{ErrorCode::InvalidRegistry, g.feature,
+                             "featureGates[" + std::to_string(i) + "]: token not machine-form"};
+            if (const json::Value* arr = gt->find("nativeFamilies");
+                arr && arr->type == json::Value::Type::Array)
+                for (size_t k = 0; k < arr->size(); ++k) {
+                    std::string s1 = strOf(arr->at(k));
+                    if (!s1.empty()) g.nativeFamilies.push_back(std::move(s1));
+                }
+            out.featureGates.push_back(std::move(g));
+        }
+    }
+    if (const json::Value* lim = root->find("limitsApple3");
+        lim && lim->type == json::Value::Type::Object) {
+        for (const auto& m : lim->obj) {
+            if (m.key == "verification") continue; // citation block, not a limit
+            double v = 0;
+            if (m.value && m.value->type == json::Value::Type::Number) v = m.value->num;
+            if (v > 0) out.limitsApple3.emplace_back(m.key, v);
+        }
+        if (const json::Value* vfy = lim->find("verification")) {
+            if (vfy->type == json::Value::Type::Object) {
+                if (strOf(vfy->find("source")).empty() || strOf(vfy->find("sdkVersion")).empty()
+                    || strOf(vfy->find("date")).empty())
+                    return Error{ErrorCode::InvalidRegistry, "limitsApple3",
+                                 "verification block must cite source + sdkVersion + date"};
+            } else {
+                return Error{ErrorCode::InvalidRegistry, "limitsApple3",
+                             "verification must be an object"};
+            }
+        } else {
+            return Error{ErrorCode::InvalidRegistry, "limitsApple3",
+                         "limits without verification block (SPEC 10.8)"};
+        }
+        if (out.limitsApple3.empty())
+            return Error{ErrorCode::InvalidRegistry, "limitsApple3", "limits block empty"};
+    }
     return Error{};
 }
 
@@ -221,6 +272,39 @@ Error validatePrimaryTargetInvariant(const GpuCapabilitiesTable& g) noexcept {
         return Error{ErrorCode::InvalidRegistry, "", "Metal4 family must be pinned to iOS/macOS 26 floor"};
     if (metal3 && metal3->minimumOs.find("16") == std::string::npos)
         return Error{ErrorCode::InvalidRegistry, "", "Metal3 family must be pinned to iOS/macOS 16 floor"};
+    return Error{};
+}
+
+Error validateFeatureGatesCrossFile(const FeatureRegistry& reg,
+                                    const GpuCapabilitiesTable& g) noexcept {
+    for (const auto& gate : g.featureGates) {
+        const FeatureRecord* rec = reg.find(gate.feature);
+        if (!rec)
+            return Error{ErrorCode::InvalidRegistry, gate.feature,
+                         "featureGates: unknown feature id"};
+        if (rec->hardwareGate.find(gate.gateToken) == std::string::npos)
+            return Error{ErrorCode::InvalidRegistry, gate.feature,
+                         "featureGates: token missing from record's hardwareGate"};
+        for (const auto& fam : gate.nativeFamilies) {
+            int idx = -1;
+            for (const auto& f : g.families) {
+                if (f.family == fam) {
+                    idx = 0;
+                    break;
+                }
+            }
+            if (idx < 0)
+                return Error{ErrorCode::InvalidRegistry, gate.feature,
+                             "featureGates: native family '" + fam + "' not documented"};
+        }
+        if (gate.basis.empty())
+            return Error{ErrorCode::InvalidRegistry, gate.feature,
+                         "featureGates: basis (verification note) required"};
+    }
+    for (const auto& [k, v] : g.limitsApple3)
+        if (!(v > 0) || v != static_cast<double>(static_cast<long long>(v)))
+            return Error{ErrorCode::InvalidRegistry, k,
+                         "limitsApple3: values must be positive integers"};
     return Error{};
 }
 

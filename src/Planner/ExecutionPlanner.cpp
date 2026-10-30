@@ -44,6 +44,29 @@ RuntimeOs fromCaps(const DeviceCaps& c) {
 
 } // namespace
 
+int ExecutionPlanner::resolveGateToken_(const std::string& gate) const noexcept {
+    // [gateApple5orMac2] — layer selection:
+    //   "All GPUs in the macOS family support layer selection. Layer selection
+    //   is available in the Apple GPU family starting with family 5."
+    //   (official Apple article: Rendering to multiple texture slices in a
+    //   draw command; feature-set tables May 21, 2026 list Apple5.)
+    if (gate.find("[gateApple5orMac2]") != std::string::npos) {
+        if (supportsFamily(caps_, family::Apple5)) return 1;
+        if (caps_.platform == PlatformKind::Macos && supportsFamily(caps_, family::Mac2)) return 1;
+        // macOS devices that only report mac1 are not provable with the
+        // current probe set => cannot resolve here (honest UNKNOWN).
+        if (caps_.platform == PlatformKind::Macos) return -1;
+        return 0;
+    }
+    return -2; // no token present
+}
+
+bool ExecutionPlanner::fallbackProvisioned(const std::string& featureId) const noexcept {
+    for (const auto& id : provisioned_)
+        if (id == featureId) return true;
+    return false;
+}
+
 Error ExecutionPlanner::plan(const std::string& featureId, Decision& out) const noexcept {
     out = Decision{};
     const FeatureRecord* rec = registry_.find(featureId);
@@ -99,6 +122,29 @@ Error ExecutionPlanner::plan(const std::string& featureId, Decision& out) const 
             return Error{ErrorCode::PlanUnsupported, featureId, "EMULATED path not provisioned"};
 
         case CompatibilityState::Partial: {
+            // Machine-token gates (new records) resolve deterministically.
+            const int tok = resolveGateToken_(rec->hardwareGate);
+            if (tok != -2) {
+                if (tok == 1) {
+                    out.op = PlanOp::Native;
+                    out.state = CompatibilityState::Partial;
+                    out.reason = "hardware gate confirmed at runtime";
+                    return Error{};
+                }
+                // Gate unmet or unresolvable: a documented fallback is the only
+                // honest path — and only when it is provisioned (D-006).
+                if (!rec->fallbackStrategy.empty() && fallbackProvisioned(featureId)) {
+                    out.op = PlanOp::FallbackTranslation;
+                    out.state = CompatibilityState::Partial;
+                    out.reason = tok == 0 ? "gate unmet; registry fallback"
+                                          : "gate unresolved; registry fallback";
+                    return Error{};
+                }
+                out.reason = tok == 0 ? "hardware gate unmet" : "hardware gate unverified";
+                return Error{ErrorCode::InsufficientHardware, featureId, "gate: " + rec->hardwareGate};
+            }
+
+            // Legacy free-text gate handling (M1 records; unchanged behavior).
             // Partial records are usable only when a runtime-verifiable or
             // hardware-derivable gate can be resolved now (SPEC D-005).
             const std::string& gate = rec->hardwareGate;
@@ -115,7 +161,30 @@ Error ExecutionPlanner::plan(const std::string& featureId, Decision& out) const 
                     out.reason = "Apple7-class device confirmed";
                     return Error{};
                 }
+                // Documented fallback (if any) may take over on lower hardware.
+                if (!rec->fallbackStrategy.empty() && fallbackProvisioned(featureId)) {
+                    out.op = PlanOp::FallbackTranslation;
+                    out.state = CompatibilityState::Partial;
+                    out.reason = "gate unmet; registry fallback";
+                    return Error{};
+                }
                 out.reason = "requires Apple7-class hardware";
+                return Error{ErrorCode::InsufficientHardware, featureId, "gate: " + gate};
+            }
+            if (gate.find("Apple6") != std::string::npos) {
+                if (supportsFamily(caps_, family::Apple6)) {
+                    out.op = PlanOp::Native;
+                    out.state = CompatibilityState::Partial;
+                    out.reason = "Apple6-class device confirmed";
+                    return Error{};
+                }
+                if (!rec->fallbackStrategy.empty() && fallbackProvisioned(featureId)) {
+                    out.op = PlanOp::FallbackTranslation;
+                    out.state = CompatibilityState::Partial;
+                    out.reason = "gate unmet; registry fallback";
+                    return Error{};
+                }
+                out.reason = "requires Apple6-class hardware";
                 return Error{ErrorCode::InsufficientHardware, featureId, "gate: " + gate};
             }
             // e.g. "runtime-verify device support" — usable natively with diagnostics.

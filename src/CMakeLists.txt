@@ -6,8 +6,11 @@ add_library(MetalCompat STATIC
     Registry/FeatureRegistry.cpp
     Planner/ExecutionPlanner.cpp
     CPU/Diagnostics/Diag.cpp
+    GPU/Shaders/ShaderVariants.cpp
     Backends/LegacyMetal/metal_bridge.mm
     Backends/LegacyMetal/legacy_ops.mm
+    Backends/LegacyMetal/render_layered.mm
+    Backends/LegacyMetal/arg_table_t1.mm
 )
 
 target_include_directories(MetalCompat

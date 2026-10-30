@@ -21,7 +21,10 @@ jobs:
       - name: Configure (host macOS)
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
       - name: Build (warnings as observed; zero-warning gate)
-        run: cmake --build build 2>&1 | tee build.log; test "$(grep -cE 'warning:|error:' build.log)" = 0
+        run: |
+          set -o pipefail
+          cmake --build build 2>&1 | tee build.log
+          test "$(grep -cE 'warning:|error:' build.log)" = 0
       - name: CTest (unit + integration + vertical slice)
         run: ctest --test-dir build --output-on-failure
       - name: Registry validator
@@ -41,4 +44,7 @@ jobs:
       - name: Configure (iOS cross)
         run: cmake -S . -B build-ios -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=RelWithDebInfo
       - name: Build (zero-warning gate)
-        run: cmake --build build-ios 2>&1 | tee build-ios.log; test "$(grep -cE 'warning:|error:' build-ios.log)" = 0
+        run: |
+          set -o pipefail
+          cmake --build build-ios 2>&1 | tee build-ios.log
+          test "$(grep -cE 'warning:|error:' build-ios.log)" = 0

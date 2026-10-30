@@ -34,3 +34,29 @@ For each workload family and hardware class:
 
 Report format: median + tails + run count + thermal state; single best runs are
 never reported as representative.
+
+## M8 update (2026-10-30) — harness + first host numbers
+
+Harness: `tests/Performance/PerfHarness` (manual run; not in ctest because
+timings are not hermetic). Use cases:
+
+- compute ceiling      : 1M-element vec_add, 20 dispatches timed after 5 warmups
+- layer selection      : 512x512 RGBA, 4 slices — the native single pass
+                         (renderTargetArrayLength) vs the per-slice fallback
+                         (4 sequential passes), each overlap-tested 50 frames
+
+Host numbers (Intel i3-10105 iGPU, Mac2, Tier-1 argument buffers, macOS 15.7.7):
+
+```
+PERF compute 1M-add  per-dispatch 2.380 ms
+PERF layered-native    1 pass, 4 slices, 512x512  2.008 ms/frame
+PERF layered-fallback  4 passes, 4 slices, 512x512  2.535 ms/frame
+```
+
+Reading: on a Tier-1-class modern-ish device the fallback costs ~+26% here
+(4 passes vs 1, uniform-hook per pass). On A9 (Apple3, reach) the native path
+is documented as unsupported ("Apple5+ or any macOS-family GPU"); the ACTUAL
+A9 delta is intentionally PENDING until the physical session — the harness
+printout is the instrument (one command line, no inference).
+
+Physical-device work remains REQUIRED per SPEC M8 (device session doc).

@@ -71,3 +71,30 @@ only — no regex rewriting of arbitrary source (hard prohibition §14.3).
    report prints current states (`examples/CapabilityReport`), the validator
    fails the build on fabricated verification blocks.
 3. Next compatibility features enter via the §4 record pipeline only.
+
+## 7. Planner fallback catalog (M5 pattern, 2026-10-30)
+
+The registry records WHAT each feature is (state + documented mapping); the
+engine decides HOW to execute it. Two mechanisms, both honest by construction:
+
+1. **Machine gate tokens** (record.pipeline `hardwareGate`):
+   `[gateApple5orMac2]` resolves at runtime from the cached DeviceCaps only
+   (Apple5+ family or macOS platform with Mac2+ family). A token is validated
+   cross-file (`validateFeatureGatesCrossFile`): the record's gate text must
+   contain the declared token verbatim and every listed native family must be
+   documented in `gpu_capabilities.json.families`.
+
+2. **Provisioned fallback catalog** (`PlannerConfig.provisionedFallbackIds`):
+   a PARTIAL record with a documented fallback strategy only reaches
+   `PlanOp::FallbackTranslation` when the fallback MODULE is shipped, tested
+   and explicitly listed (engine knowledge, not registry data — SPEC D-006).
+   When it is missing the planner refuses with InsufficientHardware. The
+   first catalog entry is `render.layered` →
+   `src/Backends/LegacyMetal/render_layered.mm` per-slice passes.
+
+Contract examples (unit-tested):
+
+- A9 (Apple3, iOS): `render.layered` + provisioned → FallbackTranslation;
+  without provisioning → refusal. Mac device (macOS/Mac2) → Native.
+- `res.acceleration` (Apple7-only record, no fallback): stays refused on
+  Apple6-class hardware even when the catalog contains other features.

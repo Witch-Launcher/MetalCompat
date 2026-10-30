@@ -1048,6 +1048,36 @@ If A9 physical hardware is unavailable, implement tests that can run in the curr
 
 ## Changelog
 
+### 0.3.0 — 2026-10-30
+
+- M5 implemented: `render.layered` record with the machine gate
+  `[gateApple5orMac2]` (Apple5+ / any macOS-family GPU per Apple's official
+  article + May 21, 2026 feature-set tables); typed per-slice fallback
+  (`render_layered.mm`) provisioned in the planner catalog and byte-compared
+  to the native pass in the integration suite.
+- M6 implemented: shader-variant subsystem (`Shader.hpp` +
+  `ShaderVariants.cpp`) — define-preamble + `#line 1` compilation by the real
+  Metal compiler (no shader-body surgery), canonical composed keys,
+  refcount-pinned LRU; `mcops_compileLibraryEx` provides explicit MSL
+  versioning and compiler diagnostics out.
+- M7 implemented: legacy tier-1 argument-buffer prototype
+  (`arg_table_t1.mm`, record `trans.mtl4.argtable.tier1`) —
+  descriptors→encoder→argument-buffer flow, host-verified classic==tier-1
+  outputs on a Tier-1 device; runtime-gated.
+- M8 implemented: perf harness (compute ceiling + layer-selection native vs
+  fallback) with first host numbers in docs/PERFORMANCE.md; physical-device
+  numbers remain required before claiming Apple-family performance facts.
+- Registry: new/updated rows (render.layered, res.textureView,
+  trans.mtl4.argtable.tier1, cmd.renderBarrierStageLimit footnote-3 rule,
+  pipe.mesh.legacy → UNSUPPORTED, pipe.tessellationFactor Apple3 gate,
+  MetalFX hardware notes); gpu_capabilities.json gained machine-checked
+  `featureGates` and `limitsApple3` blocks; planner gained fallback
+  provisioning + token resolution; validator extends to cross-file gating.
+- Runtime validations discovered by tests (docs/RESEARCH.md §9): Triangle
+  topology requirement for layer-selection pipelines, 32-byte fragment
+  constant-buffer alignment, bytesPerImage = W*H*4 for slice copies,
+  absence of `[[pixel_coord]]` (fragment position comes from stage-in).
+
 ### 0.2.1 — 2026-10-30
 
 - M4 legacy ops core implemented and host-tested (buffers/texture staging/

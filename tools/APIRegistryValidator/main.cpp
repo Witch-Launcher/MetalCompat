@@ -30,6 +30,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "invariant VIOLATION: %s\n", describe(e).c_str());
         return 1;
     }
+    e = validateFeatureGatesCrossFile(reg, g);
+    if (e) {
+        std::fprintf(stderr, "feature-gates INVALID: %s\n", describe(e).c_str());
+        return 1;
+    }
     // state distribution summary
     int counts[7] = {0};
     for (const auto& f : reg.features()) ++counts[static_cast<int>(f.state)];

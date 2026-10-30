@@ -1,4 +1,4 @@
-# MetalCompat — IMPLEMENTATION STATUS (v0.2.1, 2026-10-30)
+# MetalCompat — IMPLEMENTATION STATUS (v0.3.0, 2026-10-30)
 
 Honest states per SPEC §14.4 vocabulary: `implemented / compiled / unit-tested /
 host-tested / physical-device-tested`. Nothing below claims physical-device
@@ -87,3 +87,23 @@ Pipeline creation via `MTLCompileOptions` (MSL 2.3 ceiling documented for iOS 14
 2. Physical session on iPhone 8 Plus (A11/Apple4) — first validated device row
    (runbook: docs/DEVICE_TEST_SESSION.md).
 3. M5 first translation record (choose one feature, write the §2 record first).
+
+## M5–M8 (added 2026-10-30)
+
+| Milestone | Component | Files | State |
+|---|---|---|---|
+| M5 | Layered-render translation record + per-slice fallback | `src/Backends/LegacyMetal/render_layered.{h,mm}` | implemented, host-tested (native + fallback byte-compared to CPU reference) |
+| M5 | Planner gate tokens + provisioned-fallback catalog | `Planner/*`, registry `render.layered` | implemented, unit-tested ([gateApple5orMac2] decision table) |
+| M6 | Shader variant subsystem (define-preamble compiler path, refcounted LRU) | `include/MetalCompat/Shader.hpp`, `src/GPU/Shaders/ShaderVariants.cpp` | implemented, unit-tested (30 checks incl. lint for double release/pinned eviction) |
+| M6 | Explicit-version runtime compile op + compiler diagnostics out | `legacy_ops.{h,mm}` `mcops_compileLibraryEx/freeLibrary` | implemented, host-tested (all live variants compile at MSL 2.3) |
+| M7 | Legacy tier-1 argument buffers prototype | `arg_table_t1.{h,mm}`, record `trans.mtl4.argtable.tier1` | implemented; host-verified classic==tier1 on Tier-1 device (macOS-only path is gated at runtime) |
+| M8 | Perf harness | `tests/Performance/PerfHarness.mm` | implemented; host numbers in docs/PERFORMANCE.md |
+| — | Registry updates (render.layered, trans.mtl4.argtable.tier1, res.textureView, cmd.renderBarrierStageLimit, mesh/tess/fx corrections, categoriesAllowed+=translation) + gpu caps featureGates/limitsApple3 blocks | `registry/*.json` | implemented; validator extended + run pass |
+| — | CI pipefail fix (build gates can no longer swallow failing tee'd builds) | `.github/workflows/ci.yml` | implemented |
+
+Runtime validation findings baked into code (see docs/RESEARCH.md §9.1):
+Triangle topology requirement, 32-byte fragment uniform alignment,
+bytesPerImage rule for slice copies, absence of `[[pixel_coord]]`.
+
+New-build results: 3/3 ctest, unit 47→68 live checks, integration 41→around 60 checks
+(layered native/fallback + tier-1 rows added), iOS arm64 cross-build clean.

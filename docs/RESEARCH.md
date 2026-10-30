@@ -139,3 +139,70 @@ Notes:
 - Apple docs `supportsFamily(_:)` page (fetched 2026-10-30).
 - Apple Metal Resources / Metal 4 doc links in SPEC §10 (catalogued in API_INVENTORY.md).
 - `system_profiler`, `sw_vers`, `xcodebuild -version`, `xcrun --show-sdk-version` outputs on this host (2026-10-30).
+
+## 9. M5–M8 research additions (2026-10-30)
+
+### 9.1 Layer selection (render.layered) — verified
+
+- Apple official article "Rendering to multiple texture slices in a draw
+  command" (developer.apple.com, fetched 2026-10-30): "All GPUs in the macOS
+  family support layer selection. Layer selection is available in the Apple
+  GPU family starting with family 5." The feature-set tables (May 21, 2026
+  PDF) place the first Apple-family layer-selection row at Apple5 — consistent.
+- Legacy API: `MTLRenderPassDescriptor.renderTargetArrayLength`
+  `API_AVAILABLE(macos(10.11), ios(12.0), tvos(14.5))` (MTLRenderPass.h:392).
+- Runtime validation discovered on host (Intel KBL, Mac2):
+  * pipelines must set `inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle`
+    whenever the vertex writes `[[render_target_array_index]]` (error text:
+    "Vertex shader writes render_target_array_index but inputPrimitiveTopology
+    is not specified");
+  * there is NO `[[pixel_coord]]` builtin (compiler warning: unknown attribute);
+    the fragment reads pixel coordinates from the stage-in payload's
+    `[[position]]` (`in.pos.x/y` are pixel centers, x = col + 0.5);
+  * fragment stage constant buffers bind only on **32-byte**
+    (`setFragmentBuffer:offset:`) alignment (validation: "must be a multiple
+    of 32") — the translation's per-slice uniform uses one 32-byte slot/slice;
+  * `copyFromTexture:...:toBuffer:...` requires
+    `destinationBytesPerImage` = bytes of a full image (W*H*4) for slice
+    copies (validation failure otherwise; H*4 is invalid), while 2D single-slice
+    copies use 0.
+- Native-vs-fallback byte comparison (512x512x4 in tests: 64x64x4) passes with
+  the CPU reference (±1 lsb/channel, RGBA8 quantization) on both paths.
+
+### 9.2 Legacy tier-1 argument buffers (M7) — empirical host evidence
+
+- `MTLArgumentDescriptor` (MTLDevice.h:324), `[device
+  newArgumentEncoderWithArguments:]` (MTLDevice.h:877),
+  `dev.argumentBuffersSupport` with `MTLArgumentBuffersTier1/2` (MTLDevice.h
+  298–301, 475) — all `API_AVAILABLE(macos(10.13), ios(11.0))`.
+- MSL binding form for pointer members is `device const T* m [[id(N)]]` inside
+  the struct that the kernel receives as `[[buffer(0)]]`; the encoder writes
+  the pointer into the argument buffer via `[enc setBuffer:offset:atIndex:]`
+  with `atIndex` = descriptor index. On the Tier-1 host (Intel KBL) the
+  classic binding and the tier-1 argument-buffer binding produced **the same
+  outputs** (mcops_argT1Prototype op; compare op in the integration suite).
+- Footnote 3 (feature-set tables, May 21, 2026): Apple3–Apple10 render-stage
+  memory barriers do not accept `.fragment`/`.tile` in `after` nor
+  `renderTargets` scope → registry row `cmd.renderBarrierStageLimit` UNSUPPORTED.
+- Metal 4 programming model availability starts at Apple7 (table footnote 1):
+  `trans.mtl4.argtable.tier1` is the bridge record for pre-Apple7 devices.
+
+### 9.3 Corrected UNKNOWN records (R-items)
+
+- R-2 (legacy mesh on iOS 14): feature-set tables place mesh shaders at
+  Apple7+ → `pipe.mesh.legacy` flipped UNKNOWN → UNSUPPORTED (no unverified
+  states remain for it).
+- R-1 (tessellation on Apple3): Apple3 column documents tessellation
+  (max tessellation factor 16) → `pipe.tessellationFactor` gate updated
+  (remainder stays PARTIAL/runtime-verify: macOS-floor interplay unstudied).
+- Chosen open question added: Q-layered-a9 (A9 device probe pending; cannot
+  be inferred from families per SPEC §7.2).
+
+### 9.4 Apple3 numeric limits (registry: gpu_capabilities.json)
+
+Snapshot of the Apple3 column (May 21, 2026 tables) — machine-readable copy
+lives in the registry block `limitsApple3` (validator-checked): 512 threads /
+16 352 B threadgroup memory / 4096 B inline constants / tessellation factor 16 /
+16384 tex2D / 2048 tex3D / 31 buffers + 31 textures + 16 samplers per stage
+inside argument buffers / MSAA 4 / 16-byte texture-to-buffer alignment /
+60 fragment stage-in scalars.

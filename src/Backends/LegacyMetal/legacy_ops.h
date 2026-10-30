@@ -55,6 +55,14 @@ void mcops_freeSampler(void* samplerHandle) noexcept;
 /// Runtime MSL strings → MTLLibrary (language version auto-floored per OS).
 int mcops_compileLibrary(void* device, const char* mslSource,
                          void** outLibraryHandle) noexcept;
+
+/// Runtime MSL strings → MTLLibrary with an EXPLICIT language version
+/// (mslLangVersion: 220 = MSL2.2, 230 = MSL2.3; see mc::kMslLanguage_*).
+/// `errBuf`/`errLen` are optional; on failure they receive the compiler's
+/// diagnostics for precise unsupported-construct reporting (SPEC §8.2).
+int mcops_compileLibraryEx(void* device, const char* mslSource, int mslLangVersion,
+                           char* errBuf, uint32_t errBufLen,
+                           void** outLibraryHandle) noexcept;
 void mcops_freeLibrary(void* libraryHandle) noexcept;
 
 /// Compute pipeline from a compiled library.
@@ -62,6 +70,21 @@ int mcops_newComputePipeline(void* device, const void* libraryHandle,
                              const char* functionName,
                              void** outPipelineHandle) noexcept;
 void mcops_freeComputePipeline(void* pipelineHandle) noexcept;
+
+/// Render pipeline (vs/fs from `libraryHandle`). `layered` != 0 sets
+/// inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle, which per the
+/// official layer-selection article pipelines used with layer selection must
+/// declare.
+/// Returns 0 ok; 1 invalid args; 2 function/pipeline unavailable.
+int mcops_newRenderPipeline(void* device, const void* libraryHandle,
+                            const char* vsName, const char* fsName,
+                            int layered, void** outPipelineHandle) noexcept;
+void mcops_freeRenderPipeline(void* pipelineHandle) noexcept;
+
+/// Private 2DArray render-target texture (RGBA8Unorm).
+/// Returns 0 ok; 1 invalid args; 2 texture unavailable.
+int mcops_newTextureArray(void* device, uint32_t w, uint32_t h, uint32_t layers,
+                          void** outTextureHandle) noexcept;
 
 /// 1-D thread grid: gridCount threads, threadgroupCount threads per group.
 /// GPU buffer→buffer copies use the same narrow primitive (blit) for staging.

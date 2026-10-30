@@ -43,6 +43,20 @@ struct GpuCapabilitiesTable {
     int schemaVersion = 0;
     std::string verifiedOn;
     std::vector<GpuFamilyInfo> families;
+
+    /// Machine-resolvable feature gates (OPTIONAL block "featureGates").
+    struct FeatureGate {
+        std::string feature;   // registry feature id
+        std::string gateToken; // exactly the token embedded in the record
+        std::vector<std::string> nativeFamilies;
+        std::string basis;     // citation / verification note
+    };
+    std::vector<FeatureGate> featureGates;
+
+    /// Verified numeric limits of the primary hardware target ("limitsApple3").
+    /// Long unsigned long names kept verbatim from the feature-set tables.
+    using LimitsApple3 = std::vector<std::pair<std::string, double>>;
+    LimitsApple3 limitsApple3;
 };
 
 class FeatureRegistry {
@@ -62,5 +76,9 @@ private:
 
 // Cross-checks that pin our architectural invariants (called by validator).
 Error validatePrimaryTargetInvariant(const GpuCapabilitiesTable& g) noexcept;
+/// Cross-file: every declared gate token must exist in a registered record
+/// with the same token; native families must be documented; limits positive.
+Error validateFeatureGatesCrossFile(const FeatureRegistry& reg,
+                                    const GpuCapabilitiesTable& g) noexcept;
 
 } // namespace mc

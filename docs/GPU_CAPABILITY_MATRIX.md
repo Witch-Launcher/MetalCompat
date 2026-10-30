@@ -93,3 +93,17 @@ runtime in the capability report — **never hard-coded per SoC**.
 | A9 reports `supportsFamily(MTLGPUFamilyApple3)` | **PENDING** (docs-supported, runtime proof required on hardware) |
 | A9 cannot report `MTLGPUFamilyMetal4` | PENDING (OS/family gates make it logically impossible, but device test still required before PHYSICAL-VALIDATED status) |
 | Deterministic frame render on A9 | **PENDING** (`docs/TESTING.md` device matrix) |
+
+## 7. M5–M8 matrix additions (2026-10-30)
+
+| Feature | Apple3 (A9/A10) | Apple4 (A11) | Apple5+ | macOS-family | Basis |
+|---|---|---|---|---|---|
+| render.layered (RT array length + per-draw layer) | FALLBACK (per-slice passes) | FALLBACK | NATIVE | NATIVE | official article + tables May 21, 2026 |
+| res.textureView (slice views) | NATIVE | NATIVE | NATIVE | NATIVE | iOS 9.0+/macOS 10.11+ selectors |
+| trans.mtl4.argtable.tier1 (argument buffers, tier-1) | PARTIAL (TIer1 expected; probe pending device) | PARTIAL | PARTIAL | PARTIAL | selectors iOS 11.0+; tier reported at runtime |
+| cmd.renderBarrierStageLimit (.fragment/.tile/renderTargets barriers) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED (Apple3–10) | TAS - see note | footnote 3, May 21, 2026 tables |
+| pipe.mesh.legacy (mesh shading) | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED (Apple7+) | UNSUPPORTED | tables (mesh row Apple7+) |
+| pipe.tessellationFactor (max 16) | NATIVE (factor 16) | NATIVE | NATIVE | PARTIAL (macOS floor unstudied) | Apple3 column, tables |
+
+Note: Mac2/Intel includes the layer-selection rule only via the macOS-family
+branch; device-specific refusals come from the runtime-resolved token.

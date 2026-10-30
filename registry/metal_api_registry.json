@@ -1,636 +1,721 @@
 {
-  "schemaVersion": 1,
-  "sdk": {
-    "name": "iPhoneOS26.2.sdk",
-    "version": "26.2",
-    "xcode": "26.3 (17C529)",
-    "verifiedOn": "2026-10-30"
+ "schemaVersion": 1,
+ "sdk": {
+  "name": "iPhoneOS26.2.sdk",
+  "version": "26.2",
+  "xcode": "26.3 (17C529)",
+  "verifiedOn": "2026-10-30"
+ },
+ "statesAllowed": [
+  "NATIVE",
+  "FALLBACK",
+  "EMULATED",
+  "APPROXIMATED",
+  "PARTIAL",
+  "UNSUPPORTED",
+  "UNKNOWN"
+ ],
+ "categoriesAllowed": [
+  "device",
+  "command",
+  "pipeline",
+  "resource",
+  "synchronization",
+  "shader",
+  "metal4",
+  "related-framework",
+  "diagnostics",
+  "translation"
+ ],
+ "features": [
+  {
+   "id": "dev.supportsFamily",
+   "symbol": "-[MTLDevice supportsFamily:]",
+   "category": "device",
+   "requiredOs": "iOS 13.0",
+   "requiredOsMac": "macOS 10.15",
+   "hardwareGate": "family-specific at runtime",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Primary family selector; used by the capability engine on the iOS 14 baseline.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (supportsFamily API_AVAILABLE(macos(10.15), ios(13.0)))",
+    "https://developer.apple.com/documentation/metal/mtldevice/supportsfamily(_:)"
+   ]
   },
-  "statesAllowed": [
-    "NATIVE",
-    "FALLBACK",
-    "EMULATED",
-    "APPROXIMATED",
-    "PARTIAL",
-    "UNSUPPORTED",
-    "UNKNOWN"
-  ],
-  "categoriesAllowed": [
-    "device",
-    "command",
-    "pipeline",
-    "resource",
-    "synchronization",
-    "shader",
-    "metal4",
-    "related-framework",
-    "diagnostics"
-  ],
-  "features": [
-    {
-      "id": "dev.supportsFamily",
-      "symbol": "-[MTLDevice supportsFamily:]",
-      "category": "device",
-      "requiredOs": "iOS 13.0",
-      "requiredOsMac": "macOS 10.15",
-      "hardwareGate": "family-specific at runtime",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Primary family selector; used by the capability engine on the iOS 14 baseline.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (supportsFamily API_AVAILABLE(macos(10.15), ios(13.0)))",
-        "https://developer.apple.com/documentation/metal/mtldevice/supportsfamily(_:)"
-      ]
-    },
-    {
-      "id": "dev.maxBufferLength",
-      "symbol": "@property [MTLDevice maxBufferLength]",
-      "category": "device",
-      "requiredOs": "iOS 12.0",
-      "requiredOsMac": "macOS 10.14",
-      "hardwareGate": "per-device value",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Runtime-queried; never hard-coded per SoC.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h line ~1041 (API_AVAILABLE(macos(10.14), ios(12.0)))"
-      ]
-    },
-    {
-      "id": "dev.maxThreadgroupMemoryLength",
-      "symbol": "@property [MTLDevice maxThreadgroupMemoryLength]",
-      "category": "device",
-      "requiredOs": "iOS 11.0",
-      "requiredOsMac": "macOS 10.13",
-      "hardwareGate": "per-device value",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Runtime-queried.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~847)"
-      ]
-    },
-    {
-      "id": "dev.argumentBuffersTier",
-      "symbol": "@property [MTLDevice argumentBuffersSupport]",
-      "category": "device",
-      "requiredOs": "iOS 11.0",
-      "requiredOsMac": "macOS 10.13",
-      "hardwareGate": "tier varies per family/device",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "A9 tier value is research item R-3 (UNKNOWN until probed).",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~475)"
-      ]
-    },
-    {
-      "id": "dev.rwTextureTier",
-      "symbol": "MTLReadWriteTextureTier (None/1/2)",
-      "category": "device",
-      "requiredOs": "iOS 11.0",
-      "requiredOsMac": "macOS 10.13",
-      "hardwareGate": "tier varies per family/device",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": null,
-      "notes": "Tier value on A9 unverified (markers in registry); planner must not assume Tier 2.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~234-238)"
-      ]
-    },
-    {
-      "id": "dev.residencySet",
-      "symbol": "MTLResidencySet",
-      "category": "resource",
-      "requiredOs": "iOS 18.0",
-      "requiredOsMac": "macOS 15.0",
-      "hardwareGate": "none",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": "OS floor above iOS 14 baseline; no legacy equivalent needed (residency is default on iOS-era unified memory).",
-      "notes": "Registry keeps the record for the Metal 4 route.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLResidencySet.h (API_AVAILABLE(macos(15.0), ios(18.0)))"
-      ]
-    },
-    {
-      "id": "cmd.queue",
-      "symbol": "MTLCommandQueue",
-      "category": "command",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Legacy command architecture; MetalCompat baseline.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLCommandQueue.h"
-      ]
-    },
-    {
-      "id": "cmd.buffer",
-      "symbol": "MTLCommandBuffer",
-      "category": "command",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "See CPU_RUNTIME.md ownership rules.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLCommandBuffer.h"
-      ]
-    },
-    {
-      "id": "cmd.encoders",
-      "symbol": "MTLRenderCommandEncoder / MTLComputeCommandEncoder / MTLBlitCommandEncoder",
-      "category": "command",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK headers MTLCommandEncoder.h, MTLRenderCommandEncoder.h, MTLComputeCommandEncoder.h, MTLBlitCommandEncoder.h"
-      ]
-    },
-    {
-      "id": "cmd.event",
-      "symbol": "MTLEvent",
-      "category": "synchronization",
-      "requiredOs": "iOS 12.0",
-      "requiredOsMac": "macOS 10.14",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Buffer-level GPU sync primitive on the baseline.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLEvent.h (API_AVAILABLE(macos(10.14), ios(12.0)))"
-      ]
-    },
-    {
-      "id": "cmd.fence",
-      "symbol": "MTLFence",
-      "category": "synchronization",
-      "requiredOs": "iOS 10.0",
-      "requiredOsMac": "macOS 10.13",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Render pass - throughput texture ordering primitive.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (newFence API_AVAILABLE(macos(10.13), ios(10.0)))"
-      ]
-    },
-    {
-      "id": "cmd.indirectBuffer",
-      "symbol": "-[MTLDevice newIndirectCommandBufferWithDescriptor:maxCommandCount:options:]",
-      "category": "command",
-      "requiredOs": "iOS 12.0",
-      "requiredOsMac": "macOS 10.14",
-      "hardwareGate": "runtime-verify device support",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": null,
-      "notes": "Support flag on A9 must be probed (registry open question).",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~904)"
-      ]
-    },
-    {
-      "id": "pipe.render",
-      "symbol": "MTLRenderPipelineDescriptor / MTLRenderPipelineState",
-      "category": "pipeline",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Core vertical slice path.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~719)"
-      ]
-    },
-    {
-      "id": "pipe.compute",
-      "symbol": "MTLComputePipelineDescriptor / MTLComputePipelineState",
-      "category": "pipeline",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLComputePipeline.h"
-      ]
-    },
-    {
-      "id": "pipe.depthStencil",
-      "symbol": "MTLDepthStencilDescriptor / MTLDepthStencilState",
-      "category": "pipeline",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~609)"
-      ]
-    },
-    {
-      "id": "pipe.tessellationFactor",
-      "symbol": "MTLRenderCommandEncoder setTessellationFactorBuffer:... / MTLTessellationFactorFormat",
-      "category": "pipeline",
-      "requiredOs": "iOS 10.0",
-      "requiredOsMac": "macOS 10.12",
-      "hardwareGate": "UNKNOWN on Apple3 (A9) — research item R-1",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": null,
-      "notes": "API verified at OS level; hardware gate must be probed before planner allows use.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK headers MTLRenderCommandEncoder.h (~813), MTLRenderPipeline.h (~209)"
-      ]
-    },
-    {
-      "id": "pipe.mesh.legacy",
-      "symbol": "legacy mesh render pipeline (pre-Metal4)",
-      "category": "pipeline",
-      "requiredOs": null,
-      "requiredOsMac": null,
-      "hardwareGate": null,
-      "compatibilityState": "UNKNOWN",
-      "fallbackStrategy": null,
-      "notes": "SDK 26.2 exposes MTL4MeshRenderPipeline only; legacy mesh path/symbol availability on iOS 14 is unresolved (R-2). No verification block by policy.",
-      "verification": null,
-      "references": [
-        "SDK header list (no legacy mesh headers present in 26.2)"
-      ]
-    },
-    {
-      "id": "res.buffer",
-      "symbol": "-[MTLDevice newBufferWithLength:options:]",
-      "category": "resource",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~591)"
-      ]
-    },
-    {
-      "id": "res.texture",
-      "symbol": "-[MTLDevice newTextureWithDescriptor:]",
-      "category": "resource",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Format support is a per-device runtime dimension.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~615)"
-      ]
-    },
-    {
-      "id": "res.heap",
-      "symbol": "-[MTLDevice newHeapWithDescriptor:]",
-      "category": "resource",
-      "requiredOs": "iOS 10.0",
-      "requiredOsMac": "macOS 10.13",
-      "hardwareGate": "runtime-verify Apple3 heap behavior",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Tier/type constraints probed at runtime.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~585)"
-      ]
-    },
-    {
-      "id": "res.acceleration",
-      "symbol": "MTLAccelerationStructure / -[MTLDevice newAccelerationStructureWithDescriptor:]",
-      "category": "resource",
-      "requiredOs": "iOS 14.0",
-      "requiredOsMac": "macOS 11.0",
-      "hardwareGate": "expected Apple7-family class per Apple docs; probe required — A9 expected NO",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": "Planner will emit Unsupported (InsufficientHardware) on devices that do not support ray tracing at runtime; software BVH is a research item (M7), never auto-chosen without record.",
-      "notes": "OS-level availability verified; hardware expectation from Apple docs association, runtime probe pending.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~1149-1150, API_AVAILABLE(macos(11.0), ios(14.0)))"
-      ]
-    },
-    {
-      "id": "mtl4.queue",
-      "symbol": "MTL4CommandQueue",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": "Separate Metal 4 backend (D-008); never presented as MTLCommandQueue.",
-      "notes": "Confirms legacy/Metal4 split.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4CommandQueue.h (API_AVAILABLE(macos(26.0), ios(26.0)))"
-      ]
-    },
-    {
-      "id": "mtl4.compiler",
-      "symbol": "MTL4Compiler / MTL4CompilerTaskOptions",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4Compiler.h"
-      ]
-    },
-    {
-      "id": "mtl4.commandBuffer",
-      "symbol": "MTL4CommandBuffer",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": null,
-      "notes": "Distinct from MTLCommandBuffer by design.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4CommandBuffer.h"
-      ]
-    },
-    {
-      "id": "mtl4.argumentTable",
-      "symbol": "MTL4ArgumentTable",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": "Maps to argument buffers tier runtime path only when probed.",
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4ArgumentTable.h"
-      ]
-    },
-    {
-      "id": "mtl4.renderPipeline",
-      "symbol": "MTL4RenderPipeline",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4RenderPipeline.h"
-      ]
-    },
-    {
-      "id": "mtl4.meshPipeline",
-      "symbol": "MTL4MeshRenderPipeline",
-      "category": "metal4",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTL4MeshRenderPipeline.h"
-      ]
-    },
-    {
-      "id": "fx.spatial",
-      "symbol": "MTLFXSpatialScaler",
-      "category": "related-framework",
-      "requiredOs": "iOS 16.0",
-      "requiredOsMac": "macOS 13.0",
-      "hardwareGate": "per Apple docs",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": "M7 may study an approximation; never advertised as full compat.",
-      "notes": "MetalFX.framework.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK MetalFX.framework/Headers/MTLFXSpatialScaler.h (API_AVAILABLE(macos(13.0), ios(16.0)))"
-      ]
-    },
-    {
-      "id": "fx.temporal",
-      "symbol": "MTLFXTemporalScaler",
-      "category": "related-framework",
-      "requiredOs": "iOS 16.0",
-      "requiredOsMac": "macOS 13.0",
-      "hardwareGate": "per Apple docs",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": "not in iOS 14 baseline; approximate study item (M7).",
-      "notes": "Reactive mask additions are iOS 17.4+ per header.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK MetalFX.framework/Headers/MTLFXTemporalScaler.h"
-      ]
-    },
-    {
-      "id": "fx.frameInterpolator",
-      "symbol": "MTLFXFrameInterpolator / MTL4FX*",
-      "category": "related-framework",
-      "requiredOs": "iOS 26.0",
-      "requiredOsMac": "macOS 26.0",
-      "hardwareGate": "MTLGPUFamilyMetal4",
-      "compatibilityState": "UNSUPPORTED",
-      "fallbackStrategy": null,
-      "notes": "",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK MetalFX.framework/Headers/MTLFXFrameInterpolator.h (API_AVAILABLE(macos(26.0), ios(26.0)))"
-      ]
-    },
-    {
-      "id": "shader.msl23.onIOS14",
-      "symbol": "MTLLanguageVersion2_3",
-      "category": "shader",
-      "requiredOs": "iOS 14.0",
-      "requiredOsMac": "macOS 11.0",
-      "hardwareGate": "none",
-      "compatibilityState": "NATIVE",
-      "fallbackStrategy": null,
-      "notes": "Highest MSL standard available at the iOS 14 floor per header enum (2.4 requires iOS 15).",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLLibrary.h (~214: MTLLanguageVersion2_3 API_AVAILABLE(macos(11.0), ios(14.0)))"
-      ]
-    },
-    {
-      "id": "diag.featureSetDeprecated",
-      "symbol": "supportsFeatureSet: / MTLFeatureSet_iOS_GPUFamily*",
-      "category": "diagnostics",
-      "requiredOs": "iOS 8.0",
-      "requiredOsMac": "macOS 10.11",
-      "hardwareGate": "none",
-      "compatibilityState": "PARTIAL",
-      "fallbackStrategy": "Not used by MetalCompat (deprecated iOS 16); supportsFamily is the selector.",
-      "notes": "Kept in registry for legacy device reports only.",
-      "verification": {
-        "source": "sdk-headers",
-        "sdkVersion": "26.2",
-        "date": "2026-10-30"
-      },
-      "references": [
-        "SDK header MTLDevice.h (~141-146)"
-      ]
-    }
-  ]
+  {
+   "id": "dev.maxBufferLength",
+   "symbol": "@property [MTLDevice maxBufferLength]",
+   "category": "device",
+   "requiredOs": "iOS 12.0",
+   "requiredOsMac": "macOS 10.14",
+   "hardwareGate": "per-device value",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Runtime-queried; never hard-coded per SoC.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h line ~1041 (API_AVAILABLE(macos(10.14), ios(12.0)))"
+   ]
+  },
+  {
+   "id": "dev.maxThreadgroupMemoryLength",
+   "symbol": "@property [MTLDevice maxThreadgroupMemoryLength]",
+   "category": "device",
+   "requiredOs": "iOS 11.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "per-device value",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Runtime-queried.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~847)"
+   ]
+  },
+  {
+   "id": "dev.argumentBuffersTier",
+   "symbol": "@property [MTLDevice argumentBuffersSupport]",
+   "category": "device",
+   "requiredOs": "iOS 11.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "tier varies per family/device",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "A9 tier value is research item R-3 (UNKNOWN until probed).",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~475)"
+   ]
+  },
+  {
+   "id": "dev.rwTextureTier",
+   "symbol": "MTLReadWriteTextureTier (None/1/2)",
+   "category": "device",
+   "requiredOs": "iOS 11.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "tier varies per family/device",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": null,
+   "notes": "Tier value on A9 unverified (markers in registry); planner must not assume Tier 2.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~234-238)"
+   ]
+  },
+  {
+   "id": "dev.residencySet",
+   "symbol": "MTLResidencySet",
+   "category": "resource",
+   "requiredOs": "iOS 18.0",
+   "requiredOsMac": "macOS 15.0",
+   "hardwareGate": "none",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": "OS floor above iOS 14 baseline; no legacy equivalent needed (residency is default on iOS-era unified memory).",
+   "notes": "Registry keeps the record for the Metal 4 route.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLResidencySet.h (API_AVAILABLE(macos(15.0), ios(18.0)))"
+   ]
+  },
+  {
+   "id": "cmd.queue",
+   "symbol": "MTLCommandQueue",
+   "category": "command",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Legacy command architecture; MetalCompat baseline.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLCommandQueue.h"
+   ]
+  },
+  {
+   "id": "cmd.buffer",
+   "symbol": "MTLCommandBuffer",
+   "category": "command",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "See CPU_RUNTIME.md ownership rules.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLCommandBuffer.h"
+   ]
+  },
+  {
+   "id": "cmd.encoders",
+   "symbol": "MTLRenderCommandEncoder / MTLComputeCommandEncoder / MTLBlitCommandEncoder",
+   "category": "command",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK headers MTLCommandEncoder.h, MTLRenderCommandEncoder.h, MTLComputeCommandEncoder.h, MTLBlitCommandEncoder.h"
+   ]
+  },
+  {
+   "id": "cmd.event",
+   "symbol": "MTLEvent",
+   "category": "synchronization",
+   "requiredOs": "iOS 12.0",
+   "requiredOsMac": "macOS 10.14",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Buffer-level GPU sync primitive on the baseline.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLEvent.h (API_AVAILABLE(macos(10.14), ios(12.0)))"
+   ]
+  },
+  {
+   "id": "cmd.fence",
+   "symbol": "MTLFence",
+   "category": "synchronization",
+   "requiredOs": "iOS 10.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Render pass - throughput texture ordering primitive.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (newFence API_AVAILABLE(macos(10.13), ios(10.0)))"
+   ]
+  },
+  {
+   "id": "cmd.indirectBuffer",
+   "symbol": "-[MTLDevice newIndirectCommandBufferWithDescriptor:maxCommandCount:options:]",
+   "category": "command",
+   "requiredOs": "iOS 12.0",
+   "requiredOsMac": "macOS 10.14",
+   "hardwareGate": "runtime-verify device support",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": null,
+   "notes": "Support flag on A9 must be probed (registry open question).",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~904)"
+   ]
+  },
+  {
+   "id": "pipe.render",
+   "symbol": "MTLRenderPipelineDescriptor / MTLRenderPipelineState",
+   "category": "pipeline",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Core vertical slice path.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~719)"
+   ]
+  },
+  {
+   "id": "pipe.compute",
+   "symbol": "MTLComputePipelineDescriptor / MTLComputePipelineState",
+   "category": "pipeline",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLComputePipeline.h"
+   ]
+  },
+  {
+   "id": "pipe.depthStencil",
+   "symbol": "MTLDepthStencilDescriptor / MTLDepthStencilState",
+   "category": "pipeline",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~609)"
+   ]
+  },
+  {
+   "id": "pipe.tessellationFactor",
+   "symbol": "MTLRenderCommandEncoder setTessellationFactorBuffer:... / MTLTessellationFactorFormat",
+   "category": "pipeline",
+   "requiredOs": "iOS 10.0",
+   "requiredOsMac": "macOS 10.12",
+   "hardwareGate": "Apple3+ (A9/A10): max tessellation factor 16 — feature-set tables May 21, 2026",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": null,
+   "notes": "API verified at OS level and hardware gate resolved: Apple3 supports tessellation (max factor 16 per official feature-set tables).",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK headers MTLRenderCommandEncoder.h (~813), MTLRenderPipeline.h (~209)"
+   ]
+  },
+  {
+   "id": "pipe.mesh.legacy",
+   "symbol": "legacy mesh render pipeline (pre-Metal4)",
+   "category": "pipeline",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": null,
+   "hardwareGate": "Apple7 per official feature-set tables (mesh shaders); Apple3 must not attempt.",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "Table row 'Mesh Shader Programming Model' lists Apple7+ (May 21, 2026 PDF). Resolves former UNKNOWN state R-2.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header list (no legacy mesh headers present in 26.2)"
+   ]
+  },
+  {
+   "id": "res.buffer",
+   "symbol": "-[MTLDevice newBufferWithLength:options:]",
+   "category": "resource",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~591)"
+   ]
+  },
+  {
+   "id": "res.texture",
+   "symbol": "-[MTLDevice newTextureWithDescriptor:]",
+   "category": "resource",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Format support is a per-device runtime dimension.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~615)"
+   ]
+  },
+  {
+   "id": "res.heap",
+   "symbol": "-[MTLDevice newHeapWithDescriptor:]",
+   "category": "resource",
+   "requiredOs": "iOS 10.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "runtime-verify Apple3 heap behavior",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Tier/type constraints probed at runtime.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~585)"
+   ]
+  },
+  {
+   "id": "res.acceleration",
+   "symbol": "MTLAccelerationStructure / -[MTLDevice newAccelerationStructureWithDescriptor:]",
+   "category": "resource",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": "macOS 11.0",
+   "hardwareGate": "expected Apple7-family class per Apple docs; probe required — A9 expected NO",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "Planner will emit Unsupported (InsufficientHardware) on devices that do not support ray tracing at runtime; software BVH is a research item (M7), never auto-chosen without record.",
+   "notes": "OS-level availability verified; hardware expectation from Apple docs association, runtime probe pending.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~1149-1150, API_AVAILABLE(macos(11.0), ios(14.0)))"
+   ]
+  },
+  {
+   "id": "mtl4.queue",
+   "symbol": "MTL4CommandQueue",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": "Separate Metal 4 backend (D-008); never presented as MTLCommandQueue.",
+   "notes": "Confirms legacy/Metal4 split.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4CommandQueue.h (API_AVAILABLE(macos(26.0), ios(26.0)))"
+   ]
+  },
+  {
+   "id": "mtl4.compiler",
+   "symbol": "MTL4Compiler / MTL4CompilerTaskOptions",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4Compiler.h"
+   ]
+  },
+  {
+   "id": "mtl4.commandBuffer",
+   "symbol": "MTL4CommandBuffer",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "Distinct from MTLCommandBuffer by design.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4CommandBuffer.h"
+   ]
+  },
+  {
+   "id": "mtl4.argumentTable",
+   "symbol": "MTL4ArgumentTable",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": "Maps to argument buffers tier runtime path only when probed.",
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4ArgumentTable.h"
+   ]
+  },
+  {
+   "id": "mtl4.renderPipeline",
+   "symbol": "MTL4RenderPipeline",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4RenderPipeline.h"
+   ]
+  },
+  {
+   "id": "mtl4.meshPipeline",
+   "symbol": "MTL4MeshRenderPipeline",
+   "category": "metal4",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTL4MeshRenderPipeline.h"
+   ]
+  },
+  {
+   "id": "fx.spatial",
+   "symbol": "MTLFXSpatialScaler",
+   "category": "related-framework",
+   "requiredOs": "iOS 16.0",
+   "requiredOsMac": "macOS 13.0",
+   "hardwareGate": "hardware row: MetalFX hardware present from Apple3; OS floor iOS 16 dominates\n MetalFX temporal scaler: Apple7 per feature-set tables",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": "M7 may study an approximation; never advertised as full compat.",
+   "notes": "MetalFX temporal scaler hardware row starts Apple7; spatial scaler hardware row includes Apple3 but OS floor (iOS 16) already exceeds target. Keyword updated after table read.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK MetalFX.framework/Headers/MTLFXSpatialScaler.h (API_AVAILABLE(macos(13.0), ios(16.0)))"
+   ]
+  },
+  {
+   "id": "fx.temporal",
+   "symbol": "MTLFXTemporalScaler",
+   "category": "related-framework",
+   "requiredOs": "iOS 16.0",
+   "requiredOsMac": "macOS 13.0",
+   "hardwareGate": "per Apple docs",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "not in iOS 14 baseline; approximate study item (M7).",
+   "notes": "Reactive mask additions are iOS 17.4+ per header.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK MetalFX.framework/Headers/MTLFXTemporalScaler.h"
+   ]
+  },
+  {
+   "id": "fx.frameInterpolator",
+   "symbol": "MTLFXFrameInterpolator / MTL4FX*",
+   "category": "related-framework",
+   "requiredOs": "iOS 26.0",
+   "requiredOsMac": "macOS 26.0",
+   "hardwareGate": "MTLGPUFamilyMetal4",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": null,
+   "notes": "",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK MetalFX.framework/Headers/MTLFXFrameInterpolator.h (API_AVAILABLE(macos(26.0), ios(26.0)))"
+   ]
+  },
+  {
+   "id": "shader.msl23.onIOS14",
+   "symbol": "MTLLanguageVersion2_3",
+   "category": "shader",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": "macOS 11.0",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Highest MSL standard available at the iOS 14 floor per header enum (2.4 requires iOS 15).",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLLibrary.h (~214: MTLLanguageVersion2_3 API_AVAILABLE(macos(11.0), ios(14.0)))"
+   ]
+  },
+  {
+   "id": "diag.featureSetDeprecated",
+   "symbol": "supportsFeatureSet: / MTLFeatureSet_iOS_GPUFamily*",
+   "category": "diagnostics",
+   "requiredOs": "iOS 8.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "Not used by MetalCompat (deprecated iOS 16); supportsFamily is the selector.",
+   "notes": "Kept in registry for legacy device reports only.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK header MTLDevice.h (~141-146)"
+   ]
+  },
+  {
+   "id": "render.layered",
+   "symbol": "MTLRenderPassDescriptor.renderTargetArrayLength",
+   "category": "pipeline",
+   "requiredOs": "iOS 12.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "[gateApple5orMac2]",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "per-slice passes via single-slice texture views (keeps one geometry simulator; docs list renderTargetArrayLength=layerCount as the alternative)",
+   "notes": "Machine gate: Apple GPU family 5+ or any macOS-family GPU (official Apple article 'Rendering to multiple texture slices in a draw command'). Legacy selector API_AVAILABLE(macos(10.11), ios(12.0)) per MTLRenderPass.h:392.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "Official Apple article: Rendering to multiple texture slices in a draw command",
+    "SDK headers MTLRenderPass.h:392",
+    "Metal feature-set tables May 21, 2026 (Apple5 first layer-selection row)"
+   ]
+  },
+  {
+   "id": "res.textureView",
+   "symbol": "MTLTexture texture view (newTextureViewWithPixelFormat...)",
+   "category": "resource",
+   "requiredOs": "iOS 9.0",
+   "requiredOsMac": "macOS 10.11",
+   "hardwareGate": "none",
+   "compatibilityState": "NATIVE",
+   "fallbackStrategy": null,
+   "notes": "Reinterprets a parent texture without copying; identity post-transform path for slices.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK headers MTLTexture.h:512 (ios 9.0 / macos 10.11)"
+   ]
+  },
+  {
+   "id": "trans.mtl4.argtable.tier1",
+   "symbol": "MTLArgumentDescriptor + MTLArgumentEncoder (legacy tier-1 argument buffers)",
+   "category": "translation",
+   "requiredOs": "iOS 11.0",
+   "requiredOsMac": "macOS 10.13",
+   "hardwareGate": "runtime probe: dev.argumentBuffersSupport >= TIER1",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "classic per-index setBuffer/setTexture bindings (the prototype validates tier-1 mappings against them)",
+   "notes": "Prototype for the Metal-4 argument-table programming model on pre-Apple7 target hardware; a bridge from the classic model to the tier-1 argument buffer (ios 11.0 era). Empirical host-verified flow: descriptor -> encoder -> arg buffer -> MSL pointer-member block.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "SDK headers MTLDevice.h:324/877/475",
+    "SDK headers MTLArgumentEncoder.h",
+    "MTL4ArgumentTable.h (reference for the Metal-4 model)"
+   ]
+  },
+  {
+   "id": "cmd.renderBarrierStageLimit",
+   "symbol": "MTLRenderCommandEncoder.memoryBarrier(scope:after:before:)",
+   "category": "synchronization",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": "macOS 11.0",
+   "hardwareGate": "UNSUPPORTED combos: after = {} or tile, or scope = renderTargets, on Apple3..Apple10",
+   "compatibilityState": "UNSUPPORTED",
+   "fallbackStrategy": "split passes (end + restart) is the mapping documented by Apple as the workaround",
+   "notes": "Feature-set tables footnote 3 (May 21, 2026): GPU devices in Apple3 through Apple10 families don't support memory barriers that include ... .fragment or .tile stages in the after argument, or MTLBarrierScope.renderTargets in the scope argument.",
+   "verification": {
+    "source": "sdk-headers",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "Metal feature-set tables May 21, 2026 footnote 3"
+   ]
+  }
+ ]
 }
