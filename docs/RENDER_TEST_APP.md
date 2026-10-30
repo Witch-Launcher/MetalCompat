@@ -27,15 +27,25 @@ answers one question: *do the compat ops behave there as they did on the host?*
   `MC-LOG` to see results live from the Mac.
 * **Rerun** button re-runs the whole session in-process.
 
-## Building the .ipa (needs your Apple ID once)
+## Building the .ipa
 
-The app *compiles* fine unsigned, but installing needs a **development team**
-(free personal Apple ID is enough; profiles expire after 7 days and are
-refreshed by re-running the script).
+### TrollStore route (DEFAULT, no signing, no Apple ID)
 
-One-time setup: open **Xcode > Settings > Accounts > Add Apple ID**.
+The repo packed an **unsigned** ipa ready for TrollStore (TrollStore manages the
+signature on-device):
 
-Then:
+```
+scripts/build_ipa_unsigned.sh
+```
+
+Output: `build-ios-ipa/MCRenderTest.ipa` (Payload/MCRenderTest.app, arm64,
+MinimumOSVersion 14.0, `UIFileSharingEnabled`). Move it to the phone (AirDrop,
+iTunes File Sharing, iCloud, ...) and install from the TrollStore share sheet.
+
+### Signed-development route (alternative)
+
+Needs a signed-in Apple ID in **Xcode > Settings > Accounts** (a free personal
+team is fine; profiles expire after 7 days and are refreshed by re-running):
 
 ```
 scripts/build_ios_ipa.sh                 # auto-detects the team from Xcode
