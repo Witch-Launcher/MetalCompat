@@ -115,6 +115,198 @@ kernel void rt_probe(device const float3* ro [[buffer(0)]],
 )MSL";
 
 // ---------------------------------------------------------------------------
+// [RT-VIEW] Real on-device ray-traced scene v1.3 — follows the official Apple
+// sample "Accelerating ray tracing using Metal" patterns (BLAS/TLAS build via
+// accelerationStructureCommandEncoder, per-instance descriptors packed as
+// MTLPackedFloat4x3 columns, fullscreen-quad copy pass with tonemapping,
+// compute->texture->drawable in one command buffer — verified against that
+// sample's Shaders.metal + Renderer.mm), adapted into a deterministic
+// animated Whitted scene: two point lights with real shadow rays, mirror
+// reflections, emissive lamp, listening into a CAMetalLayer every frame.
+// Hardware facts (Metal Feature Set Tables + Apple Tech Talks): the Metal RT
+// API is available on Apple6+ (A13 = iPhone 11 and later) and runs in
+// SOFTWARE there; hardware-accelerated ray tracing starts at Apple9
+// (A17 Pro / M3 / M4). A11 = Apple4 has NO ray tracing at all.
+//
+// Scene layout (TLAS instance_id, fixed):
+//   0 floor checker quad | 1 mirror sphere | 2 red diffuse
+//   3 blue glossy        | 4 emissive lamp sphere
+// All five objects share ONE vertex+normal pool (packed_float3, 12 B/vertex);
+// VB_BASE per instance lets the kernel fetch its triangle sub-range.
+static const int kSphStacks = 22, kSphRings = 12;
+static const int kSphVerts = (kSphStacks + 1) * (kSphRings + 1);  // 299
+static const int kSphTris = 2 * kSphStacks * kSphRings;           // 528
+// Vertex pool: 6 floor verts + 4 spheres; spheres' vBase derived from that.
+static const int kMirrorVBase = 6;
+static const int kRedVBase = 6 + 1 * kSphVerts;
+static const int kBlueVBase = 6 + 2 * kSphVerts;
+static const int kLampVBase = 6 + 3 * kSphVerts;
+
+static constexpr float kRTSceneCenter[3] = {0.0f, 0.7f, 0.0f};
+static constexpr float kRTFloorHalf = 7.0f;
+
+static int rtVertexCount() { return 6 + 4 * kSphVerts; }
+static int rtTriangleCount() { return 2 + 4 * kSphTris; }
+
+// CPU-side uniform struct; MUST byte-match MSL `struct U` below (verified by
+// static_assert), because uniforms ride on one shared storage buffer.
+struct RTUniforms {
+    float camPos[4], camRight[4], camUp[4], camFwd[4];
+    uint32_t res[2];
+    float time, pad;
+    float lightPos[2][4], lightCol[2][4];
+};
+static_assert(sizeof(RTUniforms) == 144, "MSL struct U layout mismatch");
+
+// MSL 2.4 source for the whole RT view (scene kernel + fullscreen-quad copy
+// pass). The vertex-pool base offsets are baked per instance so the kernel can
+// fetch its triangles deterministically.
+static std::string rtBuildShadeSource() {
+    char src[8192];
+    snprintf(src, sizeof(src), R"MSL(
+#include <metal_stdlib>
+#include <metal_raytracing>
+using namespace metal;
+using namespace metal::raytracing;
+
+struct U {
+    float4 camPos; float4 camRight; float4 camUp; float4 camFwd;
+    uint2 res; float time; float pad;
+    float4 lightPos[2]; float4 lightCol[2];
+};
+
+// Vertex-pool base per TLAS instance_id (0 floor, 1 mirror, 2 red, 3 blue,
+// 4 lamp). Floor quad occupies vertices 0..5.
+constant uint VB_BASE[5] = {%d, %d, %d, %d, %d};
+
+kernel void rt_shade(constant U& u [[buffer(0)]],
+                     acceleration_structure<instancing> as [[buffer(1)]],
+                     device const packed_float3* vb [[buffer(2)]],
+                     device const packed_float3* nb [[buffer(3)]],
+                     texture2d<float, access::write> dst [[texture(0)]],
+                     uint2 tid [[thread_position_in_grid]]) {
+    if (tid.x >= u.res.x || tid.y >= u.res.y) return;
+
+    const float2 uv = (float2(tid) + 0.5f) / float2(u.res);
+    const float2 ndc = uv * 2.0f - 1.0f;
+
+    const float tanf = 0.47f;  // ~51-degree vertical FOV
+    const float3 dir = normalize(u.camFwd.xyz +
+                                 u.camRight.xyz * (ndc.x * tanf) +
+                                 u.camUp.xyz   * (ndc.y * tanf));
+
+    intersector<float, instancing> rt;
+    rt.assume_geometry_type(geometry_type::triangle);
+    rt.force_opacity(forced_opacity::opaque);
+
+    ray r;
+    r.origin = u.camPos.xyz;
+    r.direction = dir;
+    r.max_distance = 1e30f;
+
+    float3 col = float3(0.0f);
+    float3 atten = float3(1.0f);
+
+    for (int b = 0; b < 3; ++b) {
+        const auto h = rt.intersect(r, as);
+        if (h.type == intersection_type::none) {
+            col += atten * float3(0.015f, 0.02f, 0.035f);
+            break;
+        }
+
+        const uint iid = h.instance_id;
+        const uint ti  = h.primitive_id;
+        const float3 p = r.origin + r.direction * h.distance;
+        const float2 bc = h.triangle_barycentric_coord;
+
+        const uint base = VB_BASE[iid] + ti * 3;
+        const float3 n0 = float3(nb[base].x, nb[base].y, nb[base].z);
+        const float3 n1 = float3(nb[base+1].x, nb[base+1].y, nb[base+1].z);
+        const float3 n2 = float3(nb[base+2].x, nb[base+2].y, nb[base+2].z);
+        float3 n = normalize((1.0f - bc.x - bc.y) * n0 + bc.x * n1 + bc.y * n2);
+        if (dot(n, r.direction) > 0.0f) n = -n;  // two-sided
+
+        if (iid == 4) {  // emissive lamp
+            col += atten * float3(3.2f, 2.5f, 1.6f);
+            break;
+        }
+
+        float3 alb;
+        float refl;
+        if (iid == 0) {
+            // Checker floor (world-space diagnostic pattern).
+            const int ci = int(floor(p.x * 0.5f)) + int(floor(p.z * 0.5f));
+            alb = (ci & 1) ? float3(0.62f, 0.61f, 0.59f)
+                           : float3(0.14f, 0.145f, 0.155f);
+            refl = 0.0f;
+        } else if (iid == 1) {
+            alb = float3(0.07f, 0.07f, 0.085f);
+            refl = 0.9f;
+        } else if (iid == 2) {
+            alb = float3(0.85f, 0.17f, 0.13f);
+            refl = 0.0f;
+        } else {
+            alb = float3(0.16f, 0.38f, 0.92f);
+            refl = 0.36f;
+        }
+
+        // Direct lighting: two point lights with real shadow rays.
+        const float3 sp = p + n * 1e-3f;
+        for (int li = 0; li < 2; ++li) {
+            const float3 Ld = u.lightPos[li].xyz - sp;
+            const float d2 = dot(Ld, Ld);
+            const float dist = sqrt(d2);
+            const float3 L = Ld / max(dist, 1e-6f);
+            const float ndl = dot(n, L);
+            if (ndl <= 0.0f) continue;
+            ray sr;
+            sr.origin = sp;
+            sr.direction = L;
+            sr.max_distance = dist - 2e-3f;
+            rt.accept_any_intersection(true);
+            if (rt.intersect(sr, as).type == intersection_type::none) {
+                col += atten * alb * u.lightCol[li].xyz *
+                       (ndl / max(d2, 0.15f));
+            }
+        }
+        col += atten * alb * float3(0.05f, 0.055f, 0.065f);
+
+        if (refl <= 0.0f || b == 2) break;
+        atten *= (iid == 1) ? float3(0.92f) : float3(0.36f);
+        r.origin = p + n * 1e-3f;
+        r.direction = normalize(reflect(r.direction, n));
+    }
+    dst.write(float4(col, 1.0f), tid);
+}
+
+constant float2 quadVerts[] = {
+    float2(-1, -1), float2(-1, 1), float2(1, 1),
+    float2(-1, -1), float2(1, 1),  float2(1, -1)
+};
+struct QOut { float4 pos [[position]]; float2 uv; };
+vertex QOut quadVert(unsigned vid [[vertex_id]]) {
+    QOut o;
+    o.pos = float4(quadVerts[vid], 0.0, 1.0);
+    o.uv = quadVerts[vid] * 0.5f + 0.5f;
+    return o;
+}
+fragment float4 quadFrag(QOut in [[stage_in]], texture2d<float> tex) {
+    constexpr sampler s(min_filter::linear, mag_filter::linear);
+    float3 c = tex.sample(s, in.uv).rgb;
+    c = c / (1.0f + c);          // Reinhard
+    c = pow(c, float3(1.0f / 2.2f));  // gamma
+    return float4(c, 1.0f);
+}
+)MSL",
+        0 /* floor quad base */ + 0,
+        6,
+        6 + kSphVerts,
+        6 + 2 * kSphVerts,
+        6 + 3 * kSphVerts);
+    return src;
+}
+
+// ---------------------------------------------------------------------------
 // Log harness: thread-safe buffer -> screen (main thread) + NSLog + file.
 static std::mutex g_logMutex;
 static std::vector<std::string> g_logLines;
@@ -190,19 +382,52 @@ static void runBlock(const char* name, T&& fn) {
 }
 
 // ---------------------------------------------------------------------------
-// Run screen: toolbar (rerun/share) + monospaced scrolling log.
+// [RT-VIEW] live scene camera. Scene sphere table (TLAS instance order
+// 1 mirror / 2 red / 3 blue / 4 lamp): {cx, cy, cz, radius, reflectivity}.
+static const float kSceneSpheres[4][5] = {
+    {-1.15f, 0.85f, 0.0f,   0.85f, 0.90f},
+    { 0.95f, 0.68f, -0.55f, 0.68f, 0.0f },
+    { 0.35f, 0.58f, 0.95f,  0.58f, 0.36f},
+    { 0.10f, 2.45f, -1.25f, 0.26f, 0.0f },
+};
+
+// ---------------------------------------------------------------------------
+// CAMetalLayer-backed view for the live RT viewport.
+@interface RtLayerView : UIView
+@end
+@implementation RtLayerView
++ (Class)layerClass {
+    return [CAMetalLayer class];
+}
+@end
+
+// Full engine interface declared here; implementation lives below the test
+// blocks (needs the check()/log() harness which is defined later in the file).
+@interface RtEngine : NSObject
+- (void)attachLayer:(CAMetalLayer*)layer overlay:(UILabel*)overlay;
+- (void)start;
+- (void)pause;
+- (void)resume;
+@end
+
+// ---------------------------------------------------------------------------
+// Run screen: top = live ray-traced viewport ([RT-VIEW]), bottom = test log.
 @interface RunScreen : UIViewController
 @end
 @implementation RunScreen {
     UITextView* _logView;
     UIButton* _rerun;
     UIButton* _share;
+    RtLayerView* _rtView;
+    UILabel* _rtOverlay;
+    RtEngine* _rtEngine;
+    bool _rtStarted;
 }
 - (void)loadView {
     [super loadView];
     self.view.backgroundColor = [UIColor blackColor];
     _logView = [[UITextView alloc] initWithFrame:self.view.bounds];
-    _logView.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    _logView.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
     _logView.textColor = [UIColor whiteColor];
     _logView.backgroundColor = [UIColor blackColor];
     _logView.editable = NO;
@@ -212,6 +437,21 @@ static void runBlock(const char* name, T&& fn) {
     _logView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                 UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:_logView];
+
+    _rtView = [[RtLayerView alloc] initWithFrame:CGRectMake(0, 0, 100, 100)];
+    _rtView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                               UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:_rtView];
+
+    _rtOverlay = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 100, 100)];
+    _rtOverlay.textColor = [UIColor systemOrangeColor];
+    _rtOverlay.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightMedium];
+    _rtOverlay.numberOfLines = 0;
+    _rtOverlay.textAlignment = NSTextAlignmentCenter;
+    _rtOverlay.hidden = YES;
+    _rtOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                  UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:_rtOverlay];
 
     const auto make = ^UIButton*(NSString* title, SEL sel) {
         UIButton* b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -229,6 +469,26 @@ static void runBlock(const char* name, T&& fn) {
     _rerun = make(@"Rerun", @selector(rerunTapped));
     _share = make(@"Share Log", @selector(shareTapped));
 }
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (_rtStarted) return;
+    _rtStarted = true;
+    _rtEngine = [[RtEngine alloc] init];
+    [_rtEngine attachLayer:(CAMetalLayer*)_rtView.layer overlay:_rtOverlay];
+    [_rtEngine start];
+}
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [_rtEngine pause];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [_rtEngine resume];
+}
+- (void)dealloc {
+    [_rtEngine pause];
+    // ARC on; ivars released automatically.
+}
 - (void)viewWillLayoutSubviews {
     [super viewWillLayoutSubviews];
     const CGFloat w = self.view.bounds.size.width;
@@ -239,7 +499,12 @@ static void runBlock(const char* name, T&& fn) {
     _rerun.frame = CGRectMake(margin, top + 8, (w - margin * 3) / 2, 40);
     _share.frame =
         CGRectMake(w - margin - (w - margin * 3) / 2, top + 8, (w - margin * 3) / 2, 40);
-    _logView.frame = CGRectMake(4, top + 56, w - 8, h - top - bot - 64);
+    const CGFloat rtH = (h - top - bot - 58) * 0.44f;
+    const CGFloat rtY = top + 56;
+    _rtView.frame = CGRectMake(0, rtY, w, rtH);
+    _rtOverlay.frame = CGRectMake(10, rtY + 14, w - 20, rtH - 28);
+    _logView.frame = CGRectMake(4, rtY + rtH + 10, w - 8,
+                                h - (rtY + rtH + 10) - bot - 6);
     [self.view bringSubviewToFront:_rerun];
     [self.view bringSubviewToFront:_share];
 }
@@ -862,6 +1127,427 @@ static void testArgT1Block(void* dev) {
     mcops_freeBuffer(&dstC);
     mcops_freeBuffer(&dstT1);
 }
+
+// ---------------------------------------------------------------------------
+// [RT-VIEW] Live ray-traced viewport engine (v1.3). Renderer structure follows
+// the official Apple sample "Accelerating ray tracing using Metal":
+//   compute kernel -> RGBA32F private texture -> fullscreen quad copy pass
+//   (tonemap in fragment) -> CAMetalLayer drawable, all in one command buffer;
+//   acceleration structures built once via accelerationStructureCommandEncoder;
+//   per-instance MTLPackedFloat4x3 column-major descriptor packing.
+// Scene: checker floor, mirror sphere, red diffuse, blue glossy, emissive
+// lamp (whitted, 2 bounces max), two point lights (one orbits) + shadow rays.
+// Animation: slow orbiting camera + orbiting light => live moving shadows.
+@implementation RtEngine {
+    CAMetalLayer* _layer;
+    UILabel* _overlay;
+    id<MTLDevice> _dev;
+    id<MTLCommandQueue> _q;
+    id<MTLComputePipelineState> _rtPS;
+    id<MTLRenderPipelineState> _copyPS;
+    id<MTLAccelerationStructure> _tlas;
+    id<MTLAccelerationStructure> _blasArr[5];
+    id<MTLBuffer> _vbuf;
+    id<MTLBuffer> _nbuf;
+    id<MTLBuffer> _uBuf[3];
+    id<MTLTexture> _rtTex;
+    CADisplayLink* _link;
+    dispatch_semaphore_t _sem;
+    bool _supported;
+    int _ring;
+    int _frames;
+    int _fpsFrames;
+    double _fpsT0;
+    uint32_t _rtW, _rtH;
+}
+- (void)attachLayer:(CAMetalLayer*)layer overlay:(UILabel*)overlay {
+    _layer = layer;
+    _overlay = overlay;
+    _dev = (__bridge id<MTLDevice>)(mcmtl_deviceHandle());
+    _supported = [_dev supportsRaytracing] == YES && _dev != nil;
+    if (!_supported) {
+        NSString* fam = @"Apple4-class Mac GPU";
+        if (@available(iOS 11.0, *)) {
+        }
+        _overlay.hidden = NO;
+        _overlay.text =
+            @"Ray tracing is NOT available on this hardware.\n"
+            @"The Metal RT API needs Apple6+ (A13 / iPhone 11 or later; runs in\n"
+            @"software on those GPUs). Hardware RT acceleration = Apple9\n"
+            @"(A17 Pro, M3, M4). Viewport shows the test log instead.";
+#ifndef NDEBUG
+        log(std::string("[RT-VIEW] unavailable: supportsRaytracing=NO (") +
+            std::string(_dev ? [fam UTF8String] : "no device") + ")");
+#endif
+        return;
+    }
+}
+- (void)fail:(const std::string&)why {
+    check(false, "[RT-VIEW] " + why);
+    if (_link) { [_link invalidate]; _link = nil; }
+    _supported = false;
+    if (_overlay) {
+        _overlay.hidden = NO;
+        _overlay.text = [NSString stringWithFormat:@"[RT-VIEW] FAIL: %s",
+                                                  why.c_str()];
+    }
+}
+- (bool)setupOnce {
+    if (_q) return true;
+    if (!_dev) return false;
+    _q = [_dev newCommandQueue];
+    if (!_q) { [self fail:"command queue create failed"]; return false; }
+    _sem = dispatch_semaphore_create(3);
+
+    char errs[512] = {0};
+    void* lib = nullptr;
+    const std::string src = rtBuildShadeSource();
+    const int rc = mcops_compileLibraryEx((__bridge void*)_dev, src.c_str(), 240,
+                                          errs, sizeof(errs), &lib);
+    if (rc != 0 || !lib) {
+        [self fail:"MSL 2.4 RT kernel refused: " + std::string(errs)];
+        return false;
+    }
+    id<MTLLibrary> msl = (__bridge_transfer id<MTLLibrary>)lib;
+    id<MTLFunction> fn = [msl newFunctionWithName:@"rt_shade"];
+    id<MTLFunction> vf = [msl newFunctionWithName:@"quadVert"];
+    id<MTLFunction> ff = [msl newFunctionWithName:@"quadFrag"];
+    if (!fn || !vf || !ff) {
+        [self fail:"rt_shade/quadVert/quadFrag functions not found"];
+        return false;
+    }
+    _rtPS = [_dev newComputePipelineStateWithFunction:fn error:nil];
+    MTLRenderPipelineDescriptor* rpd =
+        [MTLRenderPipelineDescriptor new];
+    rpd.vertexFunction = vf;
+    rpd.fragmentFunction = ff;
+    rpd.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+    if (_layer.pixelFormat == MTLPixelFormatInvalid)
+        _layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    rpd.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+    _copyPS = [_dev newRenderPipelineStateWithDescriptor:rpd error:nil];
+    if (!_rtPS || !_copyPS) {
+        [self fail:"pipeline create failed"];
+        return false;
+    }
+    check(true, "[RT-VIEW] MSL 2.4 kernel + copy pipelines compiled/created");
+
+    // ---- Scene geometry (single shared pool; one BLAS per object). ----
+    const int nV = rtVertexCount();
+    _vbuf = [_dev newBufferWithLength:nV * 12
+                              options:MTLResourceStorageModeShared];
+    _nbuf = [_dev newBufferWithLength:nV * 12
+                              options:MTLResourceStorageModeShared];
+    if (!_vbuf || !_nbuf) { [self fail:"vertex buffers"]; return false; }
+    auto* V = (float*)_vbuf.contents;
+    auto* N = (float*)_nbuf.contents;
+    int pv = 0;
+    // Floor quad (two triangles, CCW seen from +Y).
+    const float h = kRTFloorHalf;
+    const float fv[6][3] = {
+        {-h, 0, -h}, {h, 0, -h}, {h, 0, h},
+        {-h, 0, -h}, {h, 0, h},  {-h, 0, h},
+    };
+    for (int i = 0; i < 6; ++i) {
+        V[pv*3+0] = fv[i][0]; V[pv*3+1] = fv[i][1]; V[pv*3+2] = fv[i][2];
+        N[pv*3+0] = 0; N[pv*3+1] = 1; N[pv*3+2] = 0;
+        ++pv;
+    }
+    static const int vBases[4] = {6, 6 + 1 * kSphVerts, 6 + 2 * kSphVerts,
+                                  6 + 3 * kSphVerts};
+    for (int s = 0; s < 4; ++s) {
+        const float cx = kSceneSpheres[s][0];
+        const float cy = kSceneSpheres[s][1];
+        const float cz = kSceneSpheres[s][2];
+        const float r = kSceneSpheres[s][3];
+        for (int st = 0; st <= kSphStacks; ++st) {
+            const float th = float(st) / float(kSphStacks) * 3.14159265f;
+            for (int gp = 0; gp <= kSphRings; ++gp) {
+                const float ph =
+                    float(gp) / float(kSphRings) * 6.28318531f;
+                const float dx = sinf(th) * cosf(ph);
+                const float dy = cosf(th);
+                const float dz = sinf(th) * sinf(ph);
+                V[pv*3+0] = cx + r * dx;
+                V[pv*3+1] = cy + r * dy;
+                V[pv*3+2] = cz + r * dz;
+                N[pv*3+0] = dx; N[pv*3+1] = dy; N[pv*3+2] = dz;
+                ++pv;
+            }
+        }
+    }
+    check(pv == nV, "[RT-VIEW] vertex pool filled exactly");
+
+    // ---- BLAS per object; all reference the same shared vb/nb with offsets.
+    MTLAccelerationStructureTriangleGeometryDescriptor* g[5] = {
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor],
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor],
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor],
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor],
+        [MTLAccelerationStructureTriangleGeometryDescriptor descriptor],
+    };
+    MTLPrimitiveAccelerationStructureDescriptor* bdesc[5] = {
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor],
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor],
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor],
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor],
+        [MTLPrimitiveAccelerationStructureDescriptor descriptor],
+    };
+    // Geometry 0 = floor: vertices 0..5 (2 triangles, 12 B each).
+    g[0].vertexBuffer = _vbuf;  g[0].vertexBufferOffset = 0;
+    g[0].vertexStride = 12;     g[0].triangleCount = 2;
+    const int sTris = kSphTris;
+    for (int s = 0; s < 4; ++s) {
+        const int gi = s + 1;
+        g[gi].vertexBuffer = _vbuf;
+        g[gi].vertexBufferOffset = (NSUInteger)vBases[s] * 12;
+        g[gi].vertexStride = 12;
+        g[gi].triangleCount = sTris;
+    }
+    for (int i = 0; i < 5; ++i) {
+        bdesc[i].geometryDescriptors = @[ g[i] ];
+        MTLAccelerationStructureSizes bs =
+            [_dev accelerationStructureSizesWithDescriptor:bdesc[i]];
+        _blasArr[i] = [_dev newAccelerationStructureWithSize:
+                                bs.accelerationStructureSize];
+        if (!_blasArr[i]) { [self fail:"BLAS create"]; return false; }
+        id<MTLBuffer> dB = [_dev newBufferWithLength:bs.buildScratchBufferSize
+                                            options:MTLResourceStorageModePrivate];
+        id<MTLCommandBuffer> cbb = [_q commandBuffer];
+        id<MTLAccelerationStructureCommandEncoder> ab =
+            [cbb accelerationStructureCommandEncoder];
+        [ab buildAccelerationStructure:_blasArr[i]
+                             descriptor:bdesc[i]
+                          scratchBuffer:dB
+                    scratchBufferOffset:0];
+        [ab endEncoding];
+        [cbb commit];
+        [cbb waitUntilCompleted];
+        if (cbb.status != MTLCommandBufferStatusCompleted) {
+            [self fail:"BLAS encode failed"]; return false;
+        }
+    }
+    log("[RT-VIEW] 5 BLAS built on-device");
+
+    // ---- TLAS with 5 identity instances (opaque, mask 1). ----
+    id<MTLBuffer> instB = [_dev newBufferWithLength:
+                                    sizeof(MTLAccelerationStructureInstanceDescriptor) * 5
+                                    options:MTLResourceStorageModeShared];
+    MTLAccelerationStructureInstanceDescriptor* idp =
+        (MTLAccelerationStructureInstanceDescriptor*)instB.contents;
+    const MTLPackedFloat4x3 ident(
+        MTLPackedFloat3(1, 0, 0), MTLPackedFloat3(0, 1, 0),
+        MTLPackedFloat3(0, 0, 1), MTLPackedFloat3(0, 0, 0));
+    for (int i = 0; i < 5; ++i) {
+        idp[i].transformationMatrix = ident;
+        idp[i].options = MTLAccelerationStructureInstanceOptionOpaque;
+        idp[i].mask = 1;
+        idp[i].intersectionFunctionTableOffset = 0;
+        idp[i].accelerationStructureIndex = (uint32_t)i;
+    }
+    MTLInstanceAccelerationStructureDescriptor* tdesc =
+        [MTLInstanceAccelerationStructureDescriptor descriptor];
+    NSMutableArray* bl = [NSMutableArray array];
+    for (int i = 0; i < 5; ++i) [bl addObject:_blasArr[i]];
+    tdesc.instancedAccelerationStructures = bl;
+    tdesc.instanceDescriptorBuffer = instB;
+    tdesc.instanceDescriptorStride =
+        sizeof(MTLAccelerationStructureInstanceDescriptor);
+    tdesc.instanceCount = 5;
+    if (@available(ios 15.0, *)) {
+        tdesc.instanceDescriptorType =
+            MTLAccelerationStructureInstanceDescriptorTypeDefault;
+    }
+    MTLAccelerationStructureSizes ts =
+        [_dev accelerationStructureSizesWithDescriptor:tdesc];
+    _tlas = [_dev newAccelerationStructureWithSize:ts.accelerationStructureSize];
+    if (!_tlas) { [self fail:"TLAS create"]; return false; }
+    id<MTLBuffer> scratch = [_dev newBufferWithLength:ts.buildScratchBufferSize
+                                             options:MTLResourceStorageModePrivate];
+    id<MTLCommandBuffer> cbt = [_q commandBuffer];
+    id<MTLAccelerationStructureCommandEncoder> at =
+        [cbt accelerationStructureCommandEncoder];
+    [at buildAccelerationStructure:_tlas descriptor:tdesc
+                     scratchBuffer:scratch scratchBufferOffset:0];
+    [at endEncoding];
+    [cbt commit];
+    [cbt waitUntilCompleted];
+    if (cbt.status != MTLCommandBufferStatusCompleted) {
+        [self fail:"TLAS build failed"]; return false;
+    }
+    check(true, "[RT-VIEW] TLAS built (5 instances, camera-ready)");
+
+    for (int i = 0; i < 3; ++i) {
+        _uBuf[i] = [_dev newBufferWithLength:sizeof(RTUniforms)
+                                     options:MTLResourceStorageModeShared];
+        if (!_uBuf[i]) { [self fail:"uniform buffers"]; return false; }
+    }
+    _rtW = _rtH = 0;
+    _ring = 0;
+    return true;
+}
+- (void)ensureTarget {
+    // Keep the RT target at roughly half of the layer's drawable resolution,
+    // capped at 1024 pixels per side.
+    CGSize ds = _layer.drawableSize;
+    if (ds.width < 4 || ds.height < 4) return;
+    uint32_t w = (uint32_t)(ds.width * 0.5);
+    uint32_t hh = (uint32_t)(ds.height * 0.5);
+    if (w > 1024) w = 1024;
+    if (hh > 1024) hh = 1024;
+    if (w == _rtW && hh == _rtH) return;
+    _rtW = w;
+    _rtH = hh;
+    MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+    td.pixelFormat = MTLPixelFormatRGBA32Float;
+    td.textureType = MTLTextureType2D;
+    td.width = w;
+    td.height = hh;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    _rtTex = [_dev newTextureWithDescriptor:td];
+}
+- (void)tick:(CADisplayLink*)dl {
+    (void)dl;
+    if (!_supported || !_q) return;
+    @try {
+        if (!_sem) return;
+        if (dispatch_semaphore_wait(_sem, DISPATCH_TIME_NOW) != 0) return;
+
+        [self ensureTarget];
+        if (!_rtTex) { dispatch_semaphore_signal(_sem); return; }
+
+        // Camera + animated lights.
+        double t = fmod(dl.timestamp, 1e6);
+        RTUniforms u;
+        memset(&u, 0, sizeof(u));
+        const float cx = kRTSceneCenter[0];
+        const float cy = kRTSceneCenter[1];
+        const float cz = kRTSceneCenter[2];
+        float angA = (float)(t * 0.05);  // camera orbit (~1 rev per 2 min)
+        const float camR = 5.6f;
+        float px = cx + cosf(angA) * camR;
+        float py = 2.35f + sinf(angA * 2.3f) * 0.28f;
+        float pz = cz + sinf(angA) * camR;
+        float fx = cx - px, fy = cy - py, fz = cz - pz;
+        float flen = sqrtf(fx*fx + fy*fy + fz*fz);
+        fx /= flen; fy /= flen; fz /= flen;
+        float upx = 0, upy = 1, upz = 0;
+        float rxx = upy*fz - upz*fy;      // right = normalize(cross(up, fwd))
+        float ryy = upz*fx - upx*fz;
+        float rzz = upx*fy - upy*fx;
+        float rln = sqrtf(rxx*rxx + ryy*ryy + rzz*rzz);
+        rxx /= rln; ryy /= rln; rzz /= rln;
+        float uxx = ryy*fz - rzz*fy;
+        float uyy = rzz*fx - rxx*fz;
+        float uzz = rxx*fy - ryy*fx;
+        u.camPos[0] = px; u.camPos[1] = py; u.camPos[2] = pz;
+        u.camFwd[0] = fx; u.camFwd[1] = fy; u.camFwd[2] = fz;
+        u.camRight[0] = rxx; u.camRight[1] = ryy; u.camRight[2] = rzz;
+        u.camUp[0] = uxx; u.camUp[1] = uyy; u.camUp[2] = uzz;
+        float la = (float)(t * 0.19) + 0.6f;   // light orbit
+        u.lightPos[0][0] = cx + cosf(la) * 3.4f;
+        u.lightPos[0][1] = 4.2f;
+        u.lightPos[0][2] = cz + sinf(la) * 3.4f;
+        u.lightCol[0][0] = 1.0f; u.lightCol[0][1] = 0.96f; u.lightCol[0][2] = 0.88f; u.lightCol[0][3] = 3.4f;
+        u.lightPos[1][0] = -4.4f; u.lightPos[1][1] = 3.4f; u.lightPos[1][2] = 2.6f;
+        u.lightCol[1][0] = 0.30f; u.lightCol[1][1] = 0.44f; u.lightCol[1][2] = 1.0f; u.lightCol[1][3] = 2.6f;
+        u.res[0] = _rtW; u.res[1] = _rtH;
+        u.time = (float)t;
+        const int idx = _ring;
+        _ring = (_ring + 1) % 3;
+        memcpy(_uBuf[idx].contents, &u, sizeof(u));
+
+        id<MTLCommandBuffer> cb = [_q commandBuffer];
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            dispatch_semaphore_signal(self->_sem);
+        }];
+        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+        [ce setComputePipelineState:_rtPS];
+        [ce setBuffer:_uBuf[idx] offset:0 atIndex:0];
+        [ce setAccelerationStructure:_tlas atBufferIndex:1];
+        [ce setBuffer:_vbuf offset:0 atIndex:2];
+        [ce setBuffer:_nbuf offset:0 atIndex:3];
+        [ce setTexture:_rtTex atIndex:0];
+        [ce useResource:_tlas usage:MTLResourceUsageRead];
+        [ce useResource:_vbuf usage:MTLResourceUsageRead];
+        [ce useResource:_nbuf usage:MTLResourceUsageRead];
+        for (int i = 0; i < 5; ++i) [ce useResource:_blasArr[i] usage:MTLResourceUsageRead];
+        const NSUInteger wq = [_rtPS maxTotalThreadsPerThreadgroup] < 64
+                                  ? [_rtPS maxTotalThreadsPerThreadgroup]
+                                  : 64;
+        MTLSize tpg = MTLSizeMake(_rtW >= 8 ? 8 : _rtW,
+                                  _rtH >= 8 ? 8 : _rtH, 1);
+        if (wq >= 64) tpg = MTLSizeMake(8, 8, 1);
+        MTLSize cgrid =
+            MTLSizeMake((NSUInteger)(_rtW + tpg.width - 1) / tpg.width,
+                        (NSUInteger)(_rtH + tpg.height - 1) / tpg.height, 1);
+        (void)wq;
+        [ce dispatchThreadgroups:cgrid threadsPerThreadgroup:tpg];
+        [ce endEncoding];
+
+        id<MTLRenderCommandEncoder> re = nil;
+        id<CAMetalDrawable> drawable = [_layer nextDrawable];
+        if (drawable) {
+            MTLRenderPassDescriptor* rpd =
+                [MTLRenderPassDescriptor renderPassDescriptor];
+            rpd.colorAttachments[0].texture = drawable.texture;
+            rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rpd.colorAttachments[0].clearColor =
+                MTLClearColorMake(0.02, 0.03, 0.05, 1.0);
+            re = [cb renderCommandEncoderWithDescriptor:rpd];
+            [re setRenderPipelineState:_copyPS];
+            [re setFragmentTexture:_rtTex atIndex:0];
+            [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+            [re endEncoding];
+            [cb presentDrawable:drawable];
+        }
+        [cb commit];
+
+        if (cb.error) {
+            [self fail:std::string("frame submit error: ") +
+                           cb.error.localizedDescription.UTF8String];
+        } else {
+            ++_frames;
+            ++_fpsFrames;
+            if (_fpsFrames == 1) {
+                check(true, "live ray-traced scene is rendering on-screen "
+                            "(whitted: shadows + mirror reflections + emissive lamp)");
+            }
+            const double now = CACurrentMediaTime();
+            if (now - _fpsT0 >= 4.0) {
+                const double fps = _fpsFrames / (now - _fpsT0);
+                log("[RT-VIEW] alive: frame=" + std::to_string(_frames) +
+                    " fps~" + std::to_string((int)(fps + 0.5)) +
+                    "  " + std::to_string((int)_rtW) + "x" +
+                    std::to_string((int)_rtH));
+                _fpsT0 = now;
+                _fpsFrames = 0;
+            }
+        }
+    } @catch (NSException* ex) {
+        log(std::string("[RT-VIEW] exception: ") +
+            (ex.reason ? ex.reason.UTF8String : "unknown"));
+        if (_link) { [_link invalidate]; _link = nil; }
+    }
+}
+- (void)start {
+    if (!_supported) return;
+    if (![self setupOnce]) return;
+    if (_link) return;
+    _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
+    _link.preferredFramesPerSecond = 30;
+    [_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    _fpsT0 = CACurrentMediaTime();
+    log("[RT-VIEW] start: live scene rendering (30 fps target)");
+}
+- (void)pause {
+    if (_link) { [_link invalidate]; _link = nil; }
+}
+- (void)resume {
+    if (_supported && _q && !_link) [self start];
+}
+@end
 
 // Exposed so the Rerun button can schedule it again.
 extern "C" void MCRunTestSession(void);

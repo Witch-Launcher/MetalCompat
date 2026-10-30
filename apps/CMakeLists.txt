@@ -23,6 +23,7 @@ target_link_libraries(MCRenderTest PRIVATE
   "-framework UIKit"
   "-framework Metal"
   "-framework Foundation"
+  "-framework QuartzCore"
 )
 
 set_target_properties(MCRenderTest PROPERTIES
