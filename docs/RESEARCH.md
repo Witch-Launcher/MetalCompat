@@ -132,7 +132,51 @@ Notes:
 | R-5 | Whether `MTLCaptureManager` becomes available under test environments on device | M3 diagnostics task |
 | R-6 | Apple docs pages requiring JS were fetched via `.md` variants where possible; a handful of tables (feature requirement table) still need an official citation | track in API_INVENTORY “last-verified” column |
 
-## 8. Sources
+## 8. Metal 1/2/3/4 compatibility model (added 2026-10-30)
+
+MetalCompat must answer two questions for every feature:
+
+1. **Can Metal-version-N code run on Metal-version-M hardware?**
+2. **Is ray tracing available, and at what tier?**
+
+### 8.1 Metal version → GPU family mapping (verified, SDK 26.2 / Apple docs)
+
+| Metal era | GPU family floor | Typical SoCs | OS floor | Notes |
+|-----------|-----------------|--------------|----------|-------|
+| Metal 1 | Apple1 (A7) | A7 | iOS 8 / macOS 10.11 | MSL 1.1–1.2 era |
+| Metal 2 | Apple2 (A8) | A8 | iOS 10 / macOS 10.12 | MSL 2.0–2.1 era |
+| Metal 3 | Apple3 (A9/A10) | **A9, A10** | iOS 12 / macOS 10.14 | MSL 2.2–2.3 era; primary target |
+| Metal 4 | MTLGPUFamilyMetal4 (5002) | MTL4-class | iOS 26 / macOS 26 | `MTL4*` headers, OS floor 26 |
+
+Rule (SPEC §7.3 / D-008): Metal 4 types (`MTL4CommandQueue`, `MTL4CommandBuffer`, …) are distinct from legacy `MTL*` types and carry `API_AVAILABLE(ios(26.0))`. An Apple3/A9 device can never report `MTLGPUFamilyMetal4`; the planner refuses `mtl4.*` on iOS 14 with `UnavailableOs`/`InsufficientHardware`.
+
+Backward direction (newer API on older hardware): a Metal-4-only feature either (a) maps to a legacy `MTL*` equivalent with identical observable semantics (FALLBACK), (b) is emulated via compute/CPU (EMULATED, documented cost), or (c) reports `UNSUPPORTED` with a typed error. Never silent no-op, never "NATIVE" for an emulated path.
+
+Forward direction (older API on newer hardware): Metal 1/2/3 APIs are subsets of the same `MTL*` runtime. On Metal-4-class devices they run NATIVE through the legacy backend; MetalCompat does not force callers onto `MTL4*` types.
+
+### 8.2 Ray tracing hardware reality (honest, per-device)
+
+`MTLAccelerationStructure` exists at OS level since **iOS 14.0 / macOS 11.0** (verified `MTLDevice.h`). OS availability ≠ hardware support.
+
+| Device class | GPU family | Ray tracing | Tier | Evidence |
+|--------------|-----------|-------------|------|----------|
+| A7 (Apple1) | 1001 | NO | none | below Apple6 floor |
+| A8 (Apple2) | 1002 | NO | none | below Apple6 floor |
+| **A9/A10 (Apple3)** | **1003** | **NO** | **none** | below Apple6 floor |
+| **A11 (Apple4)** | **1004** | **NO** | **none** | **below Apple6 floor** |
+| A12 (Apple5) | 1005 | NO | none | below Apple6 floor |
+| A13 (Apple6) | 1006 | YES | software (no HW acceleration) | docs/runtime: Apple6+ supports `MTLAccelerationStructure` API |
+| A14/M1 (Apple7) | 1007 | YES | software | Apple7+ |
+| A15/A16/M2 (Apple8) | 1008 | YES | software | Apple8+ |
+| A17/M3/M4 (Apple9) | 1009 | YES | hardware-accelerated | Apple9+ |
+
+The runtime selector is `-supportsRaytracing` (available iOS 14+; returns `BOOL`). MetalCompat probes it per device and reports:
+- `NATIVE` when `supportsRaytracing == YES` (hardware or software tier, per Apple's own classifier)
+- `UNSUPPORTED` when `supportsRaytracing == NO` — including **A11/Apple4**, which has no ray tracing at all
+
+MetalCompat does **not** claim A11 supports hardware ray tracing. Where an application requires ray tracing on A11, MetalCompat offers a **compute-based software BVH traversal emulation** (see `src/Backends/LegacyMetal/raytrace_emul.*`), labeled `EMULATED`, with documented cost and correctness contract. It is opt-in, never auto-substituted for a refused hardware path without a registry record and explicit caller acceptance (SPEC D-006, §7.1).
+
+## 10. Sources
 
 - Installed SDK headers: `/Volumes/D/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.2.sdk/System/Library/Frameworks/Metal.framework/Headers/` (checked per-symbol, 2026-10-30).
 - Apple docs `MTLGPUFamily` page (fetched 2026-10-30).

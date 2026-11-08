@@ -98,3 +98,39 @@ Contract examples (unit-tested):
   without provisioning → refusal. Mac device (macOS/Mac2) → Native.
 - `res.acceleration` (Apple7-only record, no fallback): stays refused on
   Apple6-class hardware even when the catalog contains other features.
+
+## 8. Metal version compatibility strategy (added 2026-10-30)
+
+### 8.1 Backward direction — Metal-N API on Metal-M hardware (M < N)
+
+| Metal-4 feature | Apple3/A9 (Metal 3 class) | Mapping rule |
+|-----------------|--------------------------|--------------|
+| `MTL4CommandQueue` | UNSUPPORTED | Distinct type; legacy `MTLCommandQueue` is the only path. D-008: never aliased. |
+| `MTL4CommandBuffer` | UNSUPPORTED | Same as above. |
+| `MTL4ArgumentTable` | PARTIAL → FALLBACK | Maps to legacy argument buffers (tier-1) when probed; `trans.mtl4.argtable.tier1` record. |
+| `MTL4RenderPipeline` | UNSUPPORTED | Legacy `MTLRenderPipelineState` covers the same render contract; MSL version floor applies. |
+| `MTL4MeshRenderPipeline` | UNSUPPORTED | No legacy mesh headers in SDK 26.2; `pipe.mesh.legacy` = UNSUPPORTED. |
+| Ray tracing (acceleration structures) | UNSUPPORTED (hardware) / EMULATED (opt-in compute BVH) | `supportsRaytracing == NO` on A9/A11. Emulation is `raytrace_emul.*`, explicitly opted in. |
+
+Rule: a Metal-4 feature is never reported `NATIVE` on a non-Metal4 device. It is `FALLBACK` only when a legacy op has identical observable semantics AND tests prove it; `EMULATED` only with a shipped, tested module and explicit caller acceptance; otherwise `UNSUPPORTED` with a typed error.
+
+### 8.2 Forward direction — Metal-M API on Metal-N hardware (M < N)
+
+Metal 1/2/3 APIs are subsets of the same legacy `MTL*` runtime. On Metal-4-class devices they run `NATIVE` through the LegacyMetal backend. MetalCompat does not force callers onto `MTL4*` types.
+
+### 8.3 Ray tracing strategy
+
+1. **Detection**: capability engine probes `-supportsRaytracing` per device (iOS 14+ selector).
+   - `YES` → `res.acceleration` = `NATIVE` (Apple6+/software, Apple9+/hardware).
+   - `NO` → `res.acceleration` = `UNSUPPORTED` (includes A11/Apple4 — no ray tracing at all).
+
+2. **Opt-in emulation**: `raytrace_emul.*` provides a compute-based BVH traversal
+   raytracer that runs on ANY device including A11. State = `EMULATED`, never
+   `NATIVE`. Caller must explicitly request it; the planner never auto-substitutes
+   it for a refused hardware path.
+
+3. **Tests**: integration tests compare emulated hits against a CPU reference
+   BVH traversal; unit tests verify the gating (refusal on non-RT hardware,
+   acceptance on RT hardware).
+
+## 6. Immediate roadmap enforced by this strategy

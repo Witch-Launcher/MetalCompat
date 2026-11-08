@@ -90,6 +90,21 @@ std::string synthBackend() {
      "fallbackStrategy":"separate backend","notes":"",
      "verification":{"source":"sdk-headers","sdkVersion":"26.2","date":"2026-10-30"},
      "references":["fixture"]},
+    {"id":"mtl4.commandBuffer","symbol":"MTL4CommandBuffer","category":"metal4",
+     "requiredOs":"iOS 26.0","hardwareGate":"MTLGPUFamilyMetal4","compatibilityState":"UNSUPPORTED",
+     "fallbackStrategy":null,"notes":"Distinct from MTLCommandBuffer by design.",
+     "verification":{"source":"sdk-headers","sdkVersion":"26.2","date":"2026-10-30"},
+     "references":["fixture"]},
+    {"id":"mtl4.renderPipeline","symbol":"MTL4RenderPipeline","category":"metal4",
+     "requiredOs":"iOS 26.0","hardwareGate":"MTLGPUFamilyMetal4","compatibilityState":"UNSUPPORTED",
+     "fallbackStrategy":null,"notes":"",
+     "verification":{"source":"sdk-headers","sdkVersion":"26.2","date":"2026-10-30"},
+     "references":["fixture"]},
+    {"id":"mtl4.meshPipeline","symbol":"MTL4MeshRenderPipeline","category":"metal4",
+     "requiredOs":"iOS 26.0","hardwareGate":"MTLGPUFamilyMetal4","compatibilityState":"UNSUPPORTED",
+     "fallbackStrategy":null,"notes":"",
+     "verification":{"source":"sdk-headers","sdkVersion":"26.2","date":"2026-10-30"},
+     "references":["fixture"]},
     {"id":"res.acceleration","symbol":"MTLAccelerationStructure","category":"resource",
      "requiredOs":"iOS 14.0","hardwareGate":"expected Apple7; probe required","compatibilityState":"PARTIAL",
      "fallbackStrategy":null,"notes":"",
@@ -178,7 +193,7 @@ void testRegistryValidationPositive() {
     FeatureRegistry r;
     Error e = FeatureRegistry::load(reg, r);
     check(!e, "synthetic registry loads: " + describe(e));
-    check(r.features().size() == 11, "feature count");
+    check(r.features().size() == 14, "feature count");
     check(r.find("pipe.render") != nullptr, "lookup works");
     check(r.find("no.such") == nullptr, "unknown lookup returns null");
     GpuCapabilitiesTable g;
@@ -281,6 +296,27 @@ void testPlannerDecisionTable() {
     ExecutionPlanner p2(r, apple7, ValidationLevel::Development);
     Error eA = p2.plan("res.acceleration", d);
     check(!eA && d.op == PlanOp::Native, "acceleration native on Apple7 device");
+
+    // ---- Ray tracing gating (honest per-device probe) ----
+    // res.acceleration on A9 (Apple3, no RT): InsufficientHardware.
+    check(planner.plan("res.acceleration", d).code == ErrorCode::InsufficientHardware,
+          "acceleration refused on A9 (no ray tracing)");
+    check(d.op == PlanOp::Unsupported, "acceleration decision unsupported on A9");
+
+    // mtl4.* refused on iOS 14 / non-Metal4 hardware (OS floor).
+    check(planner.plan("mtl4.queue", d).code == ErrorCode::UnavailableOs,
+          "mtl4.queue refused on iOS 14 baseline (UnavailableOs)");
+    check(planner.plan("mtl4.commandBuffer", d).code == ErrorCode::UnavailableOs,
+          "mtl4.commandBuffer refused on iOS 14 baseline");
+    check(planner.plan("mtl4.renderPipeline", d).code == ErrorCode::UnavailableOs,
+          "mtl4.renderPipeline refused on iOS 14 baseline");
+    check(planner.plan("mtl4.meshPipeline", d).code == ErrorCode::UnavailableOs,
+          "mtl4.meshPipeline refused on iOS 14 baseline");
+
+    // DeviceCaps field sanity on synthetic A9 caps.
+    check(!supportsFamily(caps, family::Metal4), "Metal4 family absent on A9");
+    check(caps.metalVersion == 3, "A9 metalVersion == 3 (Metal 3 class)");
+    check(caps.supportsRaytracing == 0, "A9 supportsRaytracing == 0 (no RT)");
 }
 
 void testVariantSubsystem() {
@@ -474,7 +510,9 @@ void testRealRegistryIfAvailable() {
     check(!e, "real feature-gate cross-file check passes: " + describe(e));
     // Every feature referenced by APIs that the vertical slice plans exists
     // in the registry (IDs used by code live with records).
-    for (const char* id : {"pipe.render", "cmd.buffer", "mtl4.queue", "fx.temporal"})
+    for (const char* id : {"pipe.render", "cmd.buffer", "mtl4.queue", "fx.temporal",
+                           "res.acceleration", "res.acceleration.emulated",
+                           "metal.version.compat"})
         check(r.find(id) != nullptr, std::string("registry contains ") + id);
 }
 

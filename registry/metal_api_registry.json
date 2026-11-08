@@ -716,6 +716,48 @@
    "references": [
     "Metal feature-set tables May 21, 2026 footnote 3"
    ]
+  },
+  {
+   "id": "metal.version.compat",
+   "symbol": "MetalCompat version-compatibility model (Metal 1/2/3/4)",
+   "category": "translation",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": "macOS 11.0",
+   "hardwareGate": "capability-gated per Metal era; MTL4* requires iOS 26 + MTLGPUFamilyMetal4",
+   "compatibilityState": "PARTIAL",
+   "fallbackStrategy": "Backward (Metal-4 API on legacy hardware): legacy MTL* equivalent where semantics match (FALLBACK), compute/CPU emulation with documented cost (EMULATED), or typed UNSUPPORTED error. Forward (Metal 1/2/3 API on Metal-4 hardware): NATIVE via legacy backend.",
+   "notes": "Metal 1 = Apple1/MSL1.x, Metal 2 = Apple2/MSL2.0-2.1, Metal 3 = Apple3/MSL2.2-2.3 (primary target, A9/A10), Metal 4 = MTLGPUFamilyMetal4/iOS 26. Backward direction never reports NATIVE on non-Metal4 hardware; forward direction is NATIVE on Metal-4 devices.",
+   "verification": {
+    "source": "sdk-headers + docs/RESEARCH.md §8",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "docs/RESEARCH.md §8 Metal 1/2/3/4 compatibility model",
+    "docs/COMPATIBILITY_STRATEGY.md §8 Metal version compatibility strategy",
+    "SDK header MTLDevice.h (MTLGPUFamily enum, supportsFamily:)"
+   ]
+  },
+  {
+   "id": "res.acceleration.emulated",
+   "symbol": "MetalCompat software BVH-traversal raytracer (raytrace_emul.*)",
+   "category": "resource",
+   "requiredOs": "iOS 14.0",
+   "requiredOsMac": "macOS 11.0",
+   "hardwareGate": "none — runs on any Metal device via compute (EMULATED, not hardware RT)",
+   "compatibilityState": "EMULATED",
+   "fallbackStrategy": "Not a fallback for hardware RT; an independent opt-in emulation. Hardware RT uses MTLAccelerationStructure when supportsRaytracing == YES.",
+   "notes": "Compute-based BVH traversal kernel (MSL 2.3) that runs on A11/Apple4 and all lower Metal devices. State = EMULATED, never NATIVE. Documented cost: one compute dispatch per pixel batch, software BVH traversal, no hardware intersection acceleration. Caller must explicitly opt in; planner never auto-substitutes for a refused hardware path.",
+   "verification": {
+    "source": "sdk-headers + implementation",
+    "sdkVersion": "26.2",
+    "date": "2026-10-30"
+   },
+   "references": [
+    "docs/RESEARCH.md §8.2 Ray tracing hardware reality",
+    "docs/COMPATIBILITY_STRATEGY.md §8.3 Ray tracing strategy",
+    "src/Backends/LegacyMetal/raytrace_emul.{h,mm}"
+   ]
   }
  ]
 }

@@ -27,6 +27,7 @@
 #include "Backends/LegacyMetal/legacy_ops.h"
 #include "Backends/LegacyMetal/render_layered.h"
 #include "Backends/LegacyMetal/arg_table_t1.h"
+#include "Backends/LegacyMetal/raytrace_emul.h"
 #include "MetalCompat/Shader.hpp"
 
 #include <chrono>
@@ -445,12 +446,14 @@ static const float kSceneSpheres[4][5] = {
 
     _rtOverlay = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 100, 100)];
     _rtOverlay.textColor = [UIColor systemOrangeColor];
-    _rtOverlay.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightMedium];
-    _rtOverlay.numberOfLines = 0;
-    _rtOverlay.textAlignment = NSTextAlignmentCenter;
+    _rtOverlay.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightMedium];
+    _rtOverlay.numberOfLines = 2;
+    _rtOverlay.textAlignment = NSTextAlignmentLeft;
+    _rtOverlay.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.55f];
+    _rtOverlay.layer.cornerRadius = 6;
+    _rtOverlay.layer.masksToBounds = YES;
     _rtOverlay.hidden = YES;
-    _rtOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                  UIViewAutoresizingFlexibleHeight;
+    _rtOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [self.view addSubview:_rtOverlay];
 
     const auto make = ^UIButton*(NSString* title, SEL sel) {
@@ -499,14 +502,19 @@ static const float kSceneSpheres[4][5] = {
     _rerun.frame = CGRectMake(margin, top + 8, (w - margin * 3) / 2, 40);
     _share.frame =
         CGRectMake(w - margin - (w - margin * 3) / 2, top + 8, (w - margin * 3) / 2, 40);
-    const CGFloat rtH = (h - top - bot - 58) * 0.44f;
+    // RT viewport takes the large upper area; log strip stays at the bottom.
     const CGFloat rtY = top + 56;
+    const CGFloat rtH = (h - rtY - bot - 60) * 0.62f;
     _rtView.frame = CGRectMake(0, rtY, w, rtH);
-    _rtOverlay.frame = CGRectMake(10, rtY + 14, w - 20, rtH - 28);
-    _logView.frame = CGRectMake(4, rtY + rtH + 10, w - 8,
-                                h - (rtY + rtH + 10) - bot - 6);
+    // Overlay text moved to top-left corner, small, semi-transparent, non-blocking.
+    _rtOverlay.frame = CGRectMake(8, rtY + 8, w - 16, 64);
+    _rtOverlay.numberOfLines = 3;
+    _rtOverlay.lineBreakMode = NSLineBreakByWordWrapping;
+    const CGFloat logY = rtY + rtH + 8;
+    _logView.frame = CGRectMake(4, logY, w - 8, h - logY - bot - 6);
     [self.view bringSubviewToFront:_rerun];
     [self.view bringSubviewToFront:_share];
+    [self.view bringSubviewToFront:_rtOverlay];
 }
 - (void)refreshOnScreen {
     const std::string body = logTextFrozen();
@@ -1087,6 +1095,198 @@ static void testRtBlock(void* dev, const mc::DeviceCaps& caps) {
 }
 
 // ---------------------------------------------------------------------------
+// [PT] Software Path Tracer (EMULATED compute BVH, runs on A11).
+// Phong cách Ray Tracing in One Weekend: diffuse / metal / dielectric,
+// anti-aliasing, multiple bounces, Schlick Fresnel, ACES tonemapping.
+// ---------------------------------------------------------------------------
+static void testPathTraceBlock(void* dev) {
+    log("== [PT] software path tracer (EMULATED compute BVH, runs on A11) ==");
+
+    const int rtAvail = mcops_rtEmulAvailable(dev);
+    log("  rtEmulAvailable=" + std::to_string(rtAvail));
+    check(rtAvail == 1, "path tracer available on this device");
+
+    // ---- Scene geometry (Ray Tracing in One Weekend style) ----
+    // Ground: large diffuse plane
+    // Spheres: diffuse red, metal gold, dielectric glass, light emitter
+    std::vector<MCRtPathTriangle> tris;
+    auto addTri = [&](const float v0[3], const float v1[3], const float v2[3],
+                      uint32_t mat, const float albedo[3], float fuzz, float ior) {
+        MCRtPathTriangle t = {};
+        t.v0[0]=v0[0]; t.v0[1]=v0[1]; t.v0[2]=v0[2]; t.v0Pad=0;
+        t.v1[0]=v1[0]; t.v1[1]=v1[1]; t.v1[2]=v1[2]; t.v1Pad=0;
+        t.v2[0]=v2[0]; t.v2[1]=v2[1]; t.v2[2]=v2[2]; t.v2Pad=0;
+        t.materialType = mat;
+        t.albedo[0]=albedo[0]; t.albedo[1]=albedo[1]; t.albedo[2]=albedo[2]; t.albedoPad=0;
+        t.fuzz = fuzz; t.ior = ior; t.pad[0]=0; t.pad[1]=0;
+        tris.push_back(t);
+    };
+
+    const float h = 7.0f;
+    // Ground plane (diffuse checkerboard-ish, single albedo for simplicity)
+    const float grayAlbedo[3] = {0.5f, 0.5f, 0.5f};
+    float gt0[3] = {-h,0,-h}; float gt1[3] = {h,0,-h}; float gt2[3] = {h,0,h};
+    float gt3[3] = {-h,0,-h}; float gt4[3] = {h,0,h};  float gt5[3] = {-h,0,h};
+    addTri(gt0, gt1, gt2,  0, grayAlbedo, 0.0f, 1.5f);
+    addTri(gt3, gt4, gt5, 0, grayAlbedo, 0.0f, 1.5f);
+
+    // Sphere helper
+    const int kStacks = 14, kRings = 7;
+    const int kSphVerts = (kStacks+1)*(kRings+1);
+    const int kSphTris  = 2*kStacks*kRings;
+    std::vector<float> V(kSphVerts*3);
+    auto sphereVerts = [&](float cx, float cy, float cz, float r) -> int {
+        int base = (int)(V.size()/3);
+        for (int st = 0; st <= kStacks; ++st) {
+            const float th = float(st)/float(kStacks)*3.14159265f;
+            for (int gp = 0; gp <= kRings; ++gp) {
+                const float ph = float(gp)/float(kRings)*6.28318531f;
+                V.push_back(cx + r*sinf(th)*cosf(ph));
+                V.push_back(cy + r*cosf(th));
+                V.push_back(cz + r*sinf(th)*sinf(ph));
+            }
+        }
+        return base;
+    };
+
+    auto addSphereTris = [&](int vBase, uint32_t mat, const float albedo[3], float fuzz, float ior) {
+        for (int st = 0; st < kStacks; ++st) {
+            for (int gp = 0; gp < kRings; ++gp) {
+                int i00 = vBase + st*(kRings+1) + gp;
+                int i01 = vBase + st*(kRings+1) + gp + 1;
+                int i10 = vBase + (st+1)*(kRings+1) + gp;
+                int i11 = vBase + (st+1)*(kRings+1) + gp + 1;
+                const float* a = &V[i00*3];
+                const float* b = &V[i10*3];
+                const float* c = &V[i11*3];
+                const float* d = &V[i01*3];
+                addTri(a, b, c, mat, albedo, fuzz, ior);
+                addTri(a, c, d, mat, albedo, fuzz, ior);
+            }
+        }
+    };
+
+    const float red[3]   = {0.85f, 0.17f, 0.13f};
+    const float gold[3]  = {0.95f, 0.75f, 0.30f};
+    const float glass[3] = {1.0f, 1.0f, 1.0f};
+    const float emit[3]  = {8.0f, 6.0f, 4.0f}; // lamp emitter
+
+    int baseMirror = sphereVerts(-1.15f, 0.85f, 0.0f, 0.85f);
+    addSphereTris(baseMirror, 1, gold, 0.0f, 1.5f);           // metal gold sphere
+
+    int baseRed = sphereVerts(0.95f, 0.68f, -0.55f, 0.68f);
+    addSphereTris(baseRed, 0, red, 0.0f, 1.5f);              // diffuse red sphere
+
+    int baseGlass = sphereVerts(0.35f, 0.58f, 0.95f, 0.58f);
+    addSphereTris(baseGlass, 2, glass, 0.0f, 1.5f);          // dielectric glass sphere
+
+    int baseLamp = sphereVerts(0.10f, 2.45f, -1.25f, 0.26f);
+    addSphereTris(baseLamp, 0, emit, 0.0f, 1.5f);            // emissive lamp sphere
+
+    // Stage triangles into a host-visible buffer.
+    MCOpBuffer triBuf{};
+    check(mcops_newBuffer(dev, (uint64_t)tris.size() * sizeof(MCRtPathTriangle),
+                          MCOP_STORAGE_AUTO, &triBuf) == 0 && triBuf.handle,
+          "pt tri buffer");
+    check(mcops_writeBufferHost(&triBuf, tris.data(),
+                                (uint64_t)tris.size() * sizeof(MCRtPathTriangle)) == 0,
+          "pt tris staged");
+
+    // Build BVH.
+    RtEmulBVHHandle bvh = nullptr;
+    uint32_t bvhNodeCount = 0;
+    check(mcops_rtEmulBuildBVH(dev, tris.data(), (uint32_t)tris.size(),
+                               &bvh, &bvhNodeCount) == 0 && bvh,
+          "pt BVH built");
+    check(bvhNodeCount > 0, "pt BVH has nodes");
+
+    // ---- Output texture RGBA32F ----
+    constexpr uint32_t RTW = 512, RTH = 512;
+    id<MTLDevice> devc = (__bridge id<MTLDevice>)dev;
+    MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+    td.pixelFormat = MTLPixelFormatRGBA32Float;
+    td.textureType = MTLTextureType2D;
+    td.width = RTW; td.height = RTH;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+    id<MTLTexture> rtTex = [devc newTextureWithDescriptor:td];
+    check(rtTex != nil, "pt render texture created");
+
+    // ---- Camera ----
+    const float cx = 0.0f, cy = 0.7f, cz = 0.0f;
+    const float camR = 5.6f;
+    float camPos[3] = {cx + cosf(0.6f)*camR, 2.35f + sinf(1.2f)*0.28f, cz + sinf(0.6f)*camR};
+    float camFwd[3] = {cx - camPos[0], cy - camPos[1], cz - camPos[2]};
+    float flen = sqrtf(camFwd[0]*camFwd[0] + camFwd[1]*camFwd[1] + camFwd[2]*camFwd[2]);
+    camFwd[0] /= flen; camFwd[1] /= flen; camFwd[2] /= flen;
+    float worldUp[3] = {0, 1, 0};
+    float camRight[3] = {worldUp[1]*camFwd[2] - worldUp[2]*camFwd[1],
+                         worldUp[2]*camFwd[0] - worldUp[0]*camFwd[2],
+                         worldUp[0]*camFwd[1] - worldUp[1]*camFwd[0]};
+    float rln = sqrtf(camRight[0]*camRight[0] + camRight[1]*camRight[1] + camRight[2]*camRight[2]);
+    camRight[0] /= rln; camRight[1] /= rln; camRight[2] /= rln;
+    float camUp[3] = {camRight[1]*camFwd[2] - camRight[2]*camFwd[1],
+                      camRight[2]*camFwd[0] - camRight[0]*camFwd[2],
+                      camRight[0]*camFwd[1] - camRight[1]*camFwd[0]};
+    MCRtCamera cam;
+    cam.pos[0]=camPos[0]; cam.pos[1]=camPos[1]; cam.pos[2]=camPos[2]; cam.posPad=0;
+    cam.fwd[0]=camFwd[0]; cam.fwd[1]=camFwd[1]; cam.fwd[2]=camFwd[2]; cam.fwdPad=0;
+    cam.right[0]=camRight[0]; cam.right[1]=camRight[1]; cam.right[2]=camRight[2]; cam.rightPad=0;
+    cam.up[0]=camUp[0]; cam.up[1]=camUp[1]; cam.up[2]=camUp[2]; cam.upPad=0;
+    // Bake aspect into tanFovY: tanFovY * aspect. For square 512x512, aspect=1.
+    cam.tanFovY = 0.47f * 1.0f; cam.pad[0] = 0; cam.pad[1] = 0; cam.pad[2] = 0;
+
+    // ---- Path trace ----
+    const uint32_t spp = 16;   // AA samples per pixel
+    const uint32_t maxBounces = 5;
+    const int rc = mcops_rtEmulPathTrace(dev, bvh, bvhNodeCount,
+                                         &cam, spp, maxBounces,
+                                         (__bridge void*)rtTex, RTW, RTH);
+    check(rc == 0, "pt path trace completed");
+
+    if (rc == 0) {
+        // Download center region to verify lit content.
+        MCOpBuffer readBuf{};
+        const uint32_t rx = RTW / 2, ry = RTH / 2;
+        const uint32_t rw = 64, rh = 64;
+        check(mcops_newBuffer(dev, rw * rh * 16, MCOP_STORAGE_AUTO, &readBuf) == 0,
+              "pt readback buffer");
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [[devc newCommandQueue] commandBuffer];
+            id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+            [be copyFromTexture:rtTex sourceSlice:0 sourceLevel:0
+                      sourceOrigin:MTLOriginMake(rx - rw/2, ry - rh/2, 0)
+                        sourceSize:MTLSizeMake(rw, rh, 1)
+                          toBuffer:(__bridge id<MTLBuffer>)readBuf.handle
+                  destinationOffset:0
+            destinationBytesPerRow:rw * 16
+            destinationBytesPerImage:rw * rh * 16];
+            [be endEncoding];
+            [cb commit];
+            [cb waitUntilCompleted];
+        }
+        check(mcops_readBufferHost(&readBuf, readBuf.cpuAddress, rw * rh * 16) == 0,
+              "pt readback completed");
+
+        // Check center pixel is not pure background.
+        const float* pf = (const float*)readBuf.cpuAddress;
+        float centerR = pf[0], centerG = pf[1], centerB = pf[2];
+        log("  pt center pixel RGBA=" +
+            std::to_string(centerR) + "," + std::to_string(centerG) + "," +
+            std::to_string(centerB) + "," + std::to_string(pf[3]));
+        check(centerR > 0.02f || centerG > 0.02f || centerB > 0.02f,
+              "pt center pixel has lit content (not pure background)");
+        check(centerR < 2.0f && centerG < 2.0f && centerB < 2.0f,
+              "pt center pixel within tonemapped range");
+
+        mcops_freeBuffer(&readBuf);
+    }
+
+    mcops_rtEmulFreeBVH(bvh);
+    mcops_freeBuffer(&triBuf);
+}
+
+// ---------------------------------------------------------------------------
 // [X] MSL cross-version matrix (Metal 1.1 .. 4.0): compile the SAME canonical
 // kernel at every published language version and verify the executed results
 // are byte-identical to a CPU reference and to each other. Honest states:
@@ -1254,33 +1454,218 @@ static void testArgT1Block(void* dev) {
     CADisplayLink* _link;
     dispatch_semaphore_t _sem;
     bool _supported;
+    bool _swRtEnabled;           // software RT fallback mode (A11 etc.)
+    RtEmulBVHHandle _swBvh;      // software RT BVH handle
+    uint32_t _swBvhNodeCount;
+    id<MTLBuffer> _swTriBuf;     // software RT triangle buffer
+    id<MTLBuffer> _swCamBuf;     // software RT camera buffer
+    id<MTLBuffer> _swLightBuf;   // software RT light buffer
+    id<MTLTexture> _swRtTex;     // software RT output texture
+    id<MTLRenderPipelineState> _swCopyPS; // copy sw-rt texture to drawable
     int _ring;
     int _frames;
     int _fpsFrames;
     double _fpsT0;
     uint32_t _rtW, _rtH;
+    uint32_t _swRtW, _swRtH;
 }
 - (void)attachLayer:(CAMetalLayer*)layer overlay:(UILabel*)overlay {
     _layer = layer;
     _overlay = overlay;
     _dev = (__bridge id<MTLDevice>)(mcmtl_deviceHandle());
     _supported = [_dev supportsRaytracing] == YES && _dev != nil;
-    if (!_supported) {
-        NSString* fam = @"Apple4-class Mac GPU";
-        if (@available(iOS 11.0, *)) {
-        }
-        _overlay.hidden = NO;
-        _overlay.text =
-            @"Ray tracing is NOT available on this hardware.\n"
-            @"The Metal RT API needs Apple6+ (A13 / iPhone 11 or later; runs in\n"
-            @"software on those GPUs). Hardware RT acceleration = Apple9\n"
-            @"(A17 Pro, M3, M4). Viewport shows the test log instead.";
-#ifndef NDEBUG
-        log(std::string("[RT-VIEW] unavailable: supportsRaytracing=NO (") +
-            std::string(_dev ? [fam UTF8String] : "no device") + ")");
-#endif
+    _swRtEnabled = false;
+    _swBvh = nullptr;
+    _swBvhNodeCount = 0;
+    _swTriBuf = nil;
+    _swCamBuf = nil;
+    _swLightBuf = nil;
+    _swRtTex = nil;
+    _swCopyPS = nil;
+
+    if (_supported) {
+        // Hardware RT path (Apple6+) — full hardware acceleration.
         return;
     }
+
+    // ---- Software RT fallback (A11 / any Metal device) ----
+    // Build a shaded ray-traced scene via compute BVH emulation and render it
+    // to the CAMetalLayer viewport. This is EMULATED, not hardware RT, but it
+    // lets the user SEE ray tracing on A11 where supportsRaytracing == NO.
+    _overlay.hidden = NO;
+    _overlay.text = @"PT path tracing (A11, no HW RT)\nvia MetalCompat BVH emulation";
+
+    if ([self setupSwRtScene:_dev]) {
+        _swRtEnabled = true;
+        log(std::string("[RT-VIEW] software RT fallback enabled on A11-class device"));
+    } else {
+        log(std::string("[RT-VIEW] software RT setup failed — viewport shows log only"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Software RT scene setup (called when hardware RT is unavailable).
+// Builds floor + 4 spheres, BVH, camera/light buffers, output texture, copy pipeline.
+// ---------------------------------------------------------------------------
+- (bool)setupSwRtScene:(id<MTLDevice>)dev {
+    // ---- Scene geometry (Ray Tracing in One Weekend style) ----
+    std::vector<MCRtPathTriangle> tris;
+    auto addTri = [&](const float v0[3], const float v1[3], const float v2[3],
+                      uint32_t mat, const float albedo[3], float fuzz, float ior) {
+        MCRtPathTriangle t = {};
+        t.v0[0]=v0[0]; t.v0[1]=v0[1]; t.v0[2]=v0[2]; t.v0Pad=0;
+        t.v1[0]=v1[0]; t.v1[1]=v1[1]; t.v1[2]=v1[2]; t.v1Pad=0;
+        t.v2[0]=v2[0]; t.v2[1]=v2[1]; t.v2[2]=v2[2]; t.v2Pad=0;
+        t.materialType = mat;
+        t.albedo[0]=albedo[0]; t.albedo[1]=albedo[1]; t.albedo[2]=albedo[2]; t.albedoPad=0;
+        t.fuzz = fuzz; t.ior = ior; t.pad[0]=0; t.pad[1]=0;
+        tris.push_back(t);
+    };
+
+    const float h = 7.0f;
+    const float grayAlbedo[3] = {0.5f, 0.5f, 0.5f};
+    float gt0[3] = {-h,0,-h}; float gt1[3] = {h,0,-h}; float gt2[3] = {h,0,h};
+    float gt3[3] = {-h,0,-h}; float gt4[3] = {h,0,h};  float gt5[3] = {-h,0,h};
+    addTri(gt0, gt1, gt2,  0, grayAlbedo, 0.0f, 1.5f);
+    addTri(gt3, gt4, gt5, 0, grayAlbedo, 0.0f, 1.5f);
+
+    const int kStacks = 12, kRings = 6;
+    const int kSphVerts = (kStacks+1)*(kRings+1);
+    std::vector<float> V;
+    auto sphereVerts = [&](float cx, float cy, float cz, float r) -> int {
+        int base = (int)(V.size()/3);
+        for (int st = 0; st <= kStacks; ++st) {
+            const float th = float(st)/float(kStacks)*3.14159265f;
+            for (int gp = 0; gp <= kRings; ++gp) {
+                const float ph = float(gp)/float(kRings)*6.28318531f;
+                V.push_back(cx + r*sinf(th)*cosf(ph));
+                V.push_back(cy + r*cosf(th));
+                V.push_back(cz + r*sinf(th)*sinf(ph));
+            }
+        }
+        return base;
+    };
+    auto addSphereTris = [&](int vBase, uint32_t mat, const float albedo[3], float fuzz, float ior) {
+        for (int st = 0; st < kStacks; ++st) {
+            for (int gp = 0; gp < kRings; ++gp) {
+                int i00 = vBase + st*(kRings+1) + gp;
+                int i01 = vBase + st*(kRings+1) + gp + 1;
+                int i10 = vBase + (st+1)*(kRings+1) + gp;
+                int i11 = vBase + (st+1)*(kRings+1) + gp + 1;
+                const float* a = &V[i00*3];
+                const float* b = &V[i10*3];
+                const float* c = &V[i11*3];
+                const float* d = &V[i01*3];
+                addTri(a, b, c, mat, albedo, fuzz, ior);
+                addTri(a, c, d, mat, albedo, fuzz, ior);
+            }
+        }
+    };
+    const float red[3]   = {0.85f, 0.17f, 0.13f};
+    const float gold[3]  = {0.95f, 0.75f, 0.30f};
+    const float glass[3] = {1.0f, 1.0f, 1.0f};
+    const float emit[3]  = {8.0f, 6.0f, 4.0f};
+    int bMirror = sphereVerts(-1.15f, 0.85f, 0.0f, 0.85f);
+    addSphereTris(bMirror, 1, gold, 0.0f, 1.5f);
+    int bRed = sphereVerts(0.95f, 0.68f, -0.55f, 0.68f);
+    addSphereTris(bRed, 0, red, 0.0f, 1.5f);
+    int bGlass = sphereVerts(0.35f, 0.58f, 0.95f, 0.58f);
+    addSphereTris(bGlass, 2, glass, 0.0f, 1.5f);
+    int bLamp = sphereVerts(0.10f, 2.45f, -1.25f, 0.26f);
+    addSphereTris(bLamp, 0, emit, 0.0f, 1.5f);
+
+    // Stage triangles into a host-visible buffer (retained for the life of the engine).
+    MCOpBuffer triBuf{};
+    if (mcops_newBuffer((__bridge void*)dev, (uint64_t)tris.size() * sizeof(MCRtPathTriangle),
+                        MCOP_STORAGE_AUTO, &triBuf) != 0 || !triBuf.handle) return false;
+    if (mcops_writeBufferHost(&triBuf, tris.data(),
+                              (uint64_t)tris.size() * sizeof(MCRtPathTriangle)) != 0) return false;
+    _swTriBuf = (__bridge_transfer id<MTLBuffer>)triBuf.handle;
+
+    // Build BVH (retained via handle).
+    RtEmulBVHHandle bvh = nullptr;
+    if (mcops_rtEmulBuildBVH((__bridge void*)dev, tris.data(), (uint32_t)tris.size(),
+                             &bvh, &_swBvhNodeCount) != 0 || !bvh) return false;
+    _swBvh = bvh;
+
+    // Output texture RGBA32F (matches layer size).
+    _swRtW = (uint32_t)_layer.drawableSize.width;
+    _swRtH = (uint32_t)_layer.drawableSize.height;
+    if (_swRtW < 4 || _swRtH < 4) { _swRtW = 512; _swRtH = 512; }
+    if (_swRtW > 1024) _swRtW = 1024;
+    if (_swRtH > 1024) _swRtH = 1024;
+    MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+    td.pixelFormat = MTLPixelFormatRGBA32Float;
+    td.textureType = MTLTextureType2D;
+    td.width = _swRtW; td.height = _swRtH;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+    _swRtTex = [dev newTextureWithDescriptor:td];
+    if (!_swRtTex) return false;
+
+    // Camera buffer (single frame, static for now).
+    const float cx = 0.0f, cy = 0.7f, cz = 0.0f;
+    const float camR = 5.6f;
+    float camPos[3] = {cx + cosf(0.5f) * camR, 2.35f + sinf(1.0f) * 0.28f, cz + sinf(0.5f) * camR};
+    float camFwd[3] = {cx - camPos[0], cy - camPos[1], cz - camPos[2]};
+    float flen = sqrtf(camFwd[0]*camFwd[0] + camFwd[1]*camFwd[1] + camFwd[2]*camFwd[2]);
+    camFwd[0] /= flen; camFwd[1] /= flen; camFwd[2] /= flen;
+    float worldUp[3] = {0, 1, 0};
+    float camRight[3] = {worldUp[1]*camFwd[2] - worldUp[2]*camFwd[1],
+                         worldUp[2]*camFwd[0] - worldUp[0]*camFwd[2],
+                         worldUp[0]*camFwd[1] - worldUp[1]*camFwd[0]};
+    float rln = sqrtf(camRight[0]*camRight[0] + camRight[1]*camRight[1] + camRight[2]*camRight[2]);
+    camRight[0] /= rln; camRight[1] /= rln; camRight[2] /= rln;
+    float camUp[3] = {camRight[1]*camFwd[2] - camRight[2]*camFwd[1],
+                      camRight[2]*camFwd[0] - camRight[0]*camFwd[2],
+                      camRight[0]*camFwd[1] - camRight[1]*camFwd[0]};
+    MCRtCamera cam;
+    cam.pos[0]=camPos[0]; cam.pos[1]=camPos[1]; cam.pos[2]=camPos[2]; cam.posPad=0;
+    cam.fwd[0]=camFwd[0]; cam.fwd[1]=camFwd[1]; cam.fwd[2]=camFwd[2]; cam.fwdPad=0;
+    cam.right[0]=camRight[0]; cam.right[1]=camRight[1]; cam.right[2]=camRight[2]; cam.rightPad=0;
+    cam.up[0]=camUp[0]; cam.up[1]=camUp[1]; cam.up[2]=camUp[2]; cam.upPad=0;
+    cam.tanFovY = 0.47f * 1.0f; cam.pad[0]=0; cam.pad[1]=0; cam.pad[2]=0;
+    _swCamBuf = [dev newBufferWithLength:sizeof(MCRtCamera)
+                                 options:MTLResourceStorageModeShared];
+    if (!_swCamBuf) return false;
+    memcpy(_swCamBuf.contents, &cam, sizeof(MCRtCamera));
+
+    // Copy pipeline: sw-rt RGBA32F texture -> layer drawable.
+    MTLRenderPipelineDescriptor* rpd = [MTLRenderPipelineDescriptor new];
+    id<MTLLibrary> lib = nil;
+    NSError* err = nil;
+    static const char* kCopyMsl = R"MSL(
+#include <metal_stdlib>
+using namespace metal;
+struct QOut { float4 pos [[position]]; float2 uv; };
+vertex QOut quadVert(unsigned vid [[vertex_id]]) {
+    QOut o;
+    float2 v[] = {float2(-1,-1), float2(-1,1), float2(1,1), float2(-1,-1), float2(1,1), float2(1,-1)};
+    o.pos = float4(v[vid], 0.0, 1.0);
+    o.uv = v[vid] * 0.5f + 0.5f;
+    return o;
+}
+fragment float4 quadFrag(QOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler s(min_filter::linear, mag_filter::linear);
+    return tex.sample(s, in.uv);
+}
+)MSL";
+    lib = [dev newLibraryWithSource:[NSString stringWithCString:kCopyMsl encoding:NSUTF8StringEncoding]
+                           options:nil error:&err];
+    if (!lib) return false;
+    id<MTLFunction> vf = [lib newFunctionWithName:@"quadVert"];
+    id<MTLFunction> ff = [lib newFunctionWithName:@"quadFrag"];
+    if (!vf || !ff) return false;
+    rpd.vertexFunction = vf;
+    rpd.fragmentFunction = ff;
+    rpd.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+    if (_layer.pixelFormat == MTLPixelFormatInvalid)
+        _layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    rpd.colorAttachments[0].pixelFormat = _layer.pixelFormat;
+    _swCopyPS = [dev newRenderPipelineStateWithDescriptor:rpd error:&err];
+    if (!_swCopyPS) return false;
+
+    return true;
 }
 - (void)fail:(const std::string&)why {
     check(false, "[RT-VIEW] " + why);
@@ -1298,6 +1683,11 @@ static void testArgT1Block(void* dev) {
     _q = [_dev newCommandQueue];
     if (!_q) { [self fail:"command queue create failed"]; return false; }
     _sem = dispatch_semaphore_create(3);
+
+    if (_swRtEnabled) {
+        // Software RT path: no hardware acceleration structures needed.
+        return true;
+    }
 
     char errs[512] = {0};
     void* lib = nullptr;
@@ -1523,120 +1913,224 @@ static void testArgT1Block(void* dev) {
 }
 - (void)tick:(CADisplayLink*)dl {
     (void)dl;
-    if (!_supported || !_q) return;
+    if (!(_supported || _swRtEnabled) || !_q) return;
     @try {
         if (!_sem) return;
         if (dispatch_semaphore_wait(_sem, DISPATCH_TIME_NOW) != 0) return;
-
-        [self ensureTarget];
-        if (!_rtTex) { dispatch_semaphore_signal(_sem); return; }
-
-        // Camera + animated lights.
-        double t = fmod(dl.timestamp, 1e6);
-        RTUniforms u;
-        memset(&u, 0, sizeof(u));
-        const float cx = kRTSceneCenter[0];
-        const float cy = kRTSceneCenter[1];
-        const float cz = kRTSceneCenter[2];
-        float angA = (float)(t * 0.05);  // camera orbit (~1 rev per 2 min)
-        const float camR = 5.6f;
-        float px = cx + cosf(angA) * camR;
-        float py = 2.35f + sinf(angA * 2.3f) * 0.28f;
-        float pz = cz + sinf(angA) * camR;
-        float fx = cx - px, fy = cy - py, fz = cz - pz;
-        float flen = sqrtf(fx*fx + fy*fy + fz*fz);
-        fx /= flen; fy /= flen; fz /= flen;
-        float upx = 0, upy = 1, upz = 0;
-        float rxx = upy*fz - upz*fy;      // right = normalize(cross(up, fwd))
-        float ryy = upz*fx - upx*fz;
-        float rzz = upx*fy - upy*fx;
-        float rln = sqrtf(rxx*rxx + ryy*ryy + rzz*rzz);
-        rxx /= rln; ryy /= rln; rzz /= rln;
-        float uxx = ryy*fz - rzz*fy;
-        float uyy = rzz*fx - rxx*fz;
-        float uzz = rxx*fy - ryy*fx;
-        u.camPos[0] = px; u.camPos[1] = py; u.camPos[2] = pz;
-        u.camFwd[0] = fx; u.camFwd[1] = fy; u.camFwd[2] = fz;
-        u.camRight[0] = rxx; u.camRight[1] = ryy; u.camRight[2] = rzz;
-        u.camUp[0] = uxx; u.camUp[1] = uyy; u.camUp[2] = uzz;
-        float la = (float)(t * 0.19) + 0.6f;   // light orbit
-        u.lightPos[0][0] = cx + cosf(la) * 3.4f;
-        u.lightPos[0][1] = 4.2f;
-        u.lightPos[0][2] = cz + sinf(la) * 3.4f;
-        u.lightCol[0][0] = 1.0f; u.lightCol[0][1] = 0.96f; u.lightCol[0][2] = 0.88f; u.lightCol[0][3] = 3.4f;
-        u.lightPos[1][0] = -4.4f; u.lightPos[1][1] = 3.4f; u.lightPos[1][2] = 2.6f;
-        u.lightCol[1][0] = 0.30f; u.lightCol[1][1] = 0.44f; u.lightCol[1][2] = 1.0f; u.lightCol[1][3] = 2.6f;
-        u.res[0] = _rtW; u.res[1] = _rtH;
-        u.time = (float)t;
-        const int idx = _ring;
-        _ring = (_ring + 1) % 3;
-        memcpy(_uBuf[idx].contents, &u, sizeof(u));
 
         id<MTLCommandBuffer> cb = [_q commandBuffer];
         [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
             dispatch_semaphore_signal(self->_sem);
         }];
-        id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
-        [ce setComputePipelineState:_rtPS];
-        [ce setBuffer:_uBuf[idx] offset:0 atIndex:0];
-        [ce setAccelerationStructure:_tlas atBufferIndex:1];
-        [ce setBuffer:_vbuf offset:0 atIndex:2];
-        [ce setBuffer:_nbuf offset:0 atIndex:3];
-        [ce setTexture:_rtTex atIndex:0];
-        [ce useResource:_tlas usage:MTLResourceUsageRead];
-        [ce useResource:_vbuf usage:MTLResourceUsageRead];
-        [ce useResource:_nbuf usage:MTLResourceUsageRead];
-        for (int i = 0; i < 5; ++i) [ce useResource:_blasArr[i] usage:MTLResourceUsageRead];
-        const NSUInteger wq = [_rtPS maxTotalThreadsPerThreadgroup] < 64
-                                  ? [_rtPS maxTotalThreadsPerThreadgroup]
-                                  : 64;
-        MTLSize tpg = MTLSizeMake(_rtW >= 8 ? 8 : _rtW,
-                                  _rtH >= 8 ? 8 : _rtH, 1);
-        if (wq >= 64) tpg = MTLSizeMake(8, 8, 1);
-        MTLSize cgrid =
-            MTLSizeMake((NSUInteger)(_rtW + tpg.width - 1) / tpg.width,
-                        (NSUInteger)(_rtH + tpg.height - 1) / tpg.height, 1);
-        (void)wq;
-        [ce dispatchThreadgroups:cgrid threadsPerThreadgroup:tpg];
-        [ce endEncoding];
 
-        id<MTLRenderCommandEncoder> re = nil;
-        id<CAMetalDrawable> drawable = [_layer nextDrawable];
-        if (drawable) {
-            MTLRenderPassDescriptor* rpd =
-                [MTLRenderPassDescriptor renderPassDescriptor];
-            rpd.colorAttachments[0].texture = drawable.texture;
-            rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
-            rpd.colorAttachments[0].clearColor =
-                MTLClearColorMake(0.02, 0.03, 0.05, 1.0);
-            re = [cb renderCommandEncoderWithDescriptor:rpd];
-            [re setRenderPipelineState:_copyPS];
-            [re setFragmentTexture:_rtTex atIndex:0];
-            [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
-            [re endEncoding];
-            [cb presentDrawable:drawable];
-        }
-        [cb commit];
+        if (_swRtEnabled) {
+            // ---- Software RT path (A11 / no hardware RT) ----
+            // Animate camera each frame, then render via compute BVH path tracer.
+            double t = fmod(dl.timestamp, 1e6);
+            const float cx = kRTSceneCenter[0];
+            const float cy = kRTSceneCenter[1];
+            const float cz = kRTSceneCenter[2];
+            float angA = (float)(t * 0.05);
+            const float camR = 5.6f;
+            float px = cx + cosf(angA) * camR;
+            float py = 2.35f + sinf(angA * 2.3f) * 0.28f;
+            float pz = cz + sinf(angA) * camR;
+            float fx = cx - px, fy = cy - py, fz = cz - pz;
+            float flen = sqrtf(fx*fx + fy*fy + fz*fz);
+            fx /= flen; fy /= flen; fz /= flen;
+            float worldUp[3] = {0, 1, 0};
+            float camRight[3] = {worldUp[1]*fz - worldUp[2]*fy,
+                                 worldUp[2]*fx - worldUp[0]*fz,
+                                 worldUp[0]*fy - worldUp[1]*fx};
+            float rln = sqrtf(camRight[0]*camRight[0] + camRight[1]*camRight[1] + camRight[2]*camRight[2]);
+            camRight[0] /= rln; camRight[1] /= rln; camRight[2] /= rln;
+            float camUp[3] = {camRight[1]*fz - camRight[2]*fy,
+                              camRight[2]*fx - camRight[0]*fz,
+                              camRight[0]*fy - camRight[1]*fx};
 
-        if (cb.error) {
-            [self fail:std::string("frame submit error: ") +
-                           cb.error.localizedDescription.UTF8String];
-        } else {
-            ++_frames;
-            ++_fpsFrames;
-            if (_fpsFrames == 1) {
-                check(true, "live ray-traced scene is rendering on-screen "
-                            "(whitted: shadows + mirror reflections + emissive lamp)");
+            MCRtCamera cam;
+            cam.pos[0]=px; cam.pos[1]=py; cam.pos[2]=pz; cam.posPad=0;
+            cam.fwd[0]=fx; cam.fwd[1]=fy; cam.fwd[2]=fz; cam.fwdPad=0;
+            cam.right[0]=camRight[0]; cam.right[1]=camRight[1]; cam.right[2]=camRight[2]; cam.rightPad=0;
+            cam.up[0]=camUp[0]; cam.up[1]=camUp[1]; cam.up[2]=camUp[2]; cam.upPad=0;
+            cam.tanFovY = 0.47f * 1.0f; cam.pad[0]=0; cam.pad[1]=0; cam.pad[2]=0;
+            memcpy(_swCamBuf.contents, &cam, sizeof(MCRtCamera));
+
+            // Resize output texture if layer size changed.
+            CGSize ds = _layer.drawableSize;
+            uint32_t w = (uint32_t)ds.width, hh = (uint32_t)ds.height;
+            if (w < 4 || hh < 4) { w = 512; hh = 512; }
+            if (w > 1024) w = 1024; if (hh > 1024) hh = 1024;
+            if (w != _swRtW || hh != _swRtH) {
+                _swRtW = w; _swRtH = hh;
+                MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+                td.pixelFormat = MTLPixelFormatRGBA32Float;
+                td.textureType = MTLTextureType2D;
+                td.width = _swRtW; td.height = _swRtH;
+                td.storageMode = MTLStorageModePrivate;
+                td.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+                _swRtTex = [_dev newTextureWithDescriptor:td];
             }
-            const double now = CACurrentMediaTime();
-            if (now - _fpsT0 >= 4.0) {
-                const double fps = _fpsFrames / (now - _fpsT0);
-                log("[RT-VIEW] alive: frame=" + std::to_string(_frames) +
-                    " fps~" + std::to_string((int)(fps + 0.5)) +
-                    "  " + std::to_string((int)_rtW) + "x" +
-                    std::to_string((int)_rtH));
-                _fpsT0 = now;
-                _fpsFrames = 0;
+
+            const uint32_t spp = 8;
+            const uint32_t maxBounces = 4;
+            const int rc = mcops_rtEmulPathTrace((__bridge void*)_dev,
+                                                 _swBvh, _swBvhNodeCount,
+                                                 &cam, spp, maxBounces,
+                                                 (__bridge void*)_swRtTex,
+                                                 _swRtW, _swRtH);
+            if (rc != 0) {
+                [self fail:std::string("sw-rt path trace failed rc=") + std::to_string(rc)];
+                dispatch_semaphore_signal(_sem);
+                return;
+            }
+
+            id<CAMetalDrawable> drawable = [_layer nextDrawable];
+            if (drawable && _swCopyPS) {
+                MTLRenderPassDescriptor* rpd =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                rpd.colorAttachments[0].texture = drawable.texture;
+                rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+                rpd.colorAttachments[0].clearColor =
+                    MTLClearColorMake(0.02, 0.03, 0.05, 1.0);
+                id<MTLRenderCommandEncoder> re =
+                    [cb renderCommandEncoderWithDescriptor:rpd];
+                [re setRenderPipelineState:_swCopyPS];
+                [re setFragmentTexture:_swRtTex atIndex:0];
+                [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+                [re endEncoding];
+                [cb presentDrawable:drawable];
+            }
+            [cb commit];
+
+            if (cb.error) {
+                [self fail:std::string("sw-rt frame submit error: ") +
+                               cb.error.localizedDescription.UTF8String];
+            } else {
+                ++_frames;
+                ++_fpsFrames;
+                if (_fpsFrames == 1) {
+                    check(true, "live software path-traced scene rendering on-screen "
+                                "(EMULATED compute BVH path tracer, runs on A11)");
+                }
+                const double now = CACurrentMediaTime();
+                if (now - _fpsT0 >= 4.0) {
+                    const double fps = _fpsFrames / (now - _fpsT0);
+                    log("[RT-VIEW] sw-rt path trace alive: frame=" + std::to_string(_frames) +
+                        " fps~" + std::to_string((int)(fps + 0.5)) +
+                        "  " + std::to_string((int)_swRtW) + "x" +
+                        std::to_string((int)_swRtH));
+                    _fpsT0 = now;
+                    _fpsFrames = 0;
+                }
+            }
+        } else {
+            // ---- Hardware RT path (Apple6+) ----
+            [self ensureTarget];
+            if (!_rtTex) { dispatch_semaphore_signal(_sem); return; }
+
+            double t = fmod(dl.timestamp, 1e6);
+            RTUniforms u;
+            memset(&u, 0, sizeof(u));
+            const float cx = kRTSceneCenter[0];
+            const float cy = kRTSceneCenter[1];
+            const float cz = kRTSceneCenter[2];
+            float angA = (float)(t * 0.05);  // camera orbit (~1 rev per 2 min)
+            const float camR = 5.6f;
+            float px = cx + cosf(angA) * camR;
+            float py = 2.35f + sinf(angA * 2.3f) * 0.28f;
+            float pz = cz + sinf(angA) * camR;
+            float fx = cx - px, fy = cy - py, fz = cz - pz;
+            float flen = sqrtf(fx*fx + fy*fy + fz*fz);
+            fx /= flen; fy /= flen; fz /= flen;
+            float upx = 0, upy = 1, upz = 0;
+            float rxx = upy*fz - upz*fy;
+            float ryy = upz*fx - upx*fz;
+            float rzz = upx*fy - upy*fx;
+            float rln = sqrtf(rxx*rxx + ryy*ryy + rzz*rzz);
+            rxx /= rln; ryy /= rln; rzz /= rln;
+            float uxx = ryy*fz - rzz*fy;
+            float uyy = rzz*fx - rxx*fz;
+            float uzz = rxx*fy - ryy*fx;
+            u.camPos[0] = px; u.camPos[1] = py; u.camPos[2] = pz;
+            u.camFwd[0] = fx; u.camFwd[1] = fy; u.camFwd[2] = fz;
+            u.camRight[0] = rxx; u.camRight[1] = ryy; u.camRight[2] = rzz;
+            u.camUp[0] = uxx; u.camUp[1] = uyy; u.camUp[2] = uzz;
+            float la = (float)(t * 0.19) + 0.6f;   // light orbit
+            u.lightPos[0][0] = cx + cosf(la) * 3.4f;
+            u.lightPos[0][1] = 4.2f;
+            u.lightPos[0][2] = cz + sinf(la) * 3.4f;
+            u.lightCol[0][0] = 1.0f; u.lightCol[0][1] = 0.96f; u.lightCol[0][2] = 0.88f; u.lightCol[0][3] = 3.4f;
+            u.lightPos[1][0] = -4.4f; u.lightPos[1][1] = 3.4f; u.lightPos[1][2] = 2.6f;
+            u.lightCol[1][0] = 0.30f; u.lightCol[1][1] = 0.44f; u.lightCol[1][2] = 1.0f; u.lightCol[1][3] = 2.6f;
+            u.res[0] = _rtW; u.res[1] = _rtH;
+            u.time = (float)t;
+            const int idx = _ring;
+            _ring = (_ring + 1) % 3;
+            memcpy(_uBuf[idx].contents, &u, sizeof(u));
+
+            id<MTLComputeCommandEncoder> ce = [cb computeCommandEncoder];
+            [ce setComputePipelineState:_rtPS];
+            [ce setBuffer:_uBuf[idx] offset:0 atIndex:0];
+            [ce setAccelerationStructure:_tlas atBufferIndex:1];
+            [ce setBuffer:_vbuf offset:0 atIndex:2];
+            [ce setBuffer:_nbuf offset:0 atIndex:3];
+            [ce setTexture:_rtTex atIndex:0];
+            [ce useResource:_tlas usage:MTLResourceUsageRead];
+            [ce useResource:_vbuf usage:MTLResourceUsageRead];
+            [ce useResource:_nbuf usage:MTLResourceUsageRead];
+            for (int i = 0; i < 5; ++i) [ce useResource:_blasArr[i] usage:MTLResourceUsageRead];
+            const NSUInteger wq = [_rtPS maxTotalThreadsPerThreadgroup] < 64
+                                      ? [_rtPS maxTotalThreadsPerThreadgroup]
+                                      : 64;
+            MTLSize tpg = MTLSizeMake(_rtW >= 8 ? 8 : _rtW,
+                                      _rtH >= 8 ? 8 : _rtH, 1);
+            if (wq >= 64) tpg = MTLSizeMake(8, 8, 1);
+            MTLSize cgrid =
+                MTLSizeMake((NSUInteger)(_rtW + tpg.width - 1) / tpg.width,
+                            (NSUInteger)(_rtH + tpg.height - 1) / tpg.height, 1);
+            (void)wq;
+            [ce dispatchThreadgroups:cgrid threadsPerThreadgroup:tpg];
+            [ce endEncoding];
+
+            id<MTLRenderCommandEncoder> re = nil;
+            id<CAMetalDrawable> drawable = [_layer nextDrawable];
+            if (drawable) {
+                MTLRenderPassDescriptor* rpd =
+                    [MTLRenderPassDescriptor renderPassDescriptor];
+                rpd.colorAttachments[0].texture = drawable.texture;
+                rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
+                rpd.colorAttachments[0].clearColor =
+                    MTLClearColorMake(0.02, 0.03, 0.05, 1.0);
+                re = [cb renderCommandEncoderWithDescriptor:rpd];
+                [re setRenderPipelineState:_copyPS];
+                [re setFragmentTexture:_rtTex atIndex:0];
+                [re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6];
+                [re endEncoding];
+                [cb presentDrawable:drawable];
+            }
+            [cb commit];
+
+            if (cb.error) {
+                [self fail:std::string("frame submit error: ") +
+                               cb.error.localizedDescription.UTF8String];
+            } else {
+                ++_frames;
+                ++_fpsFrames;
+                if (_fpsFrames == 1) {
+                    check(true, "live ray-traced scene is rendering on-screen "
+                                "(whitted: shadows + mirror reflections + emissive lamp)");
+                }
+                const double now = CACurrentMediaTime();
+                if (now - _fpsT0 >= 4.0) {
+                    const double fps = _fpsFrames / (now - _fpsT0);
+                    log("[RT-VIEW] alive: frame=" + std::to_string(_frames) +
+                        " fps~" + std::to_string((int)(fps + 0.5)) +
+                        "  " + std::to_string((int)_rtW) + "x" +
+                        std::to_string((int)_rtH));
+                    _fpsT0 = now;
+                    _fpsFrames = 0;
+                }
             }
         }
     } @catch (NSException* ex) {
@@ -1646,7 +2140,7 @@ static void testArgT1Block(void* dev) {
     }
 }
 - (void)start {
-    if (!_supported) return;
+    if (!_supported && !_swRtEnabled) return;
     if (![self setupOnce]) return;
     if (_link) return;
     _link = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
@@ -1659,7 +2153,7 @@ static void testArgT1Block(void* dev) {
     if (_link) { [_link invalidate]; _link = nil; }
 }
 - (void)resume {
-    if (_supported && _q && !_link) [self start];
+    if ((_supported || _swRtEnabled) && _q && !_link) [self start];
 }
 @end
 
@@ -1686,6 +2180,7 @@ void MCRunTestSession(void) {
         runBlock("[L] layer-selection", [&] { testLayeredBlock(dev); });
         runBlock("[A] tier1-argbufs", [&] { testArgT1Block(dev); });
         runBlock("[R] ray-tracing", [&] { testRtBlock(dev, caps); });
+        runBlock("[PT] path-tracer", [&] { testPathTraceBlock(dev); });
         runBlock("[X] msl-cross-version", [&] { testCrossVersionBlock(dev, caps); });
         const auto g1 = std::chrono::steady_clock::now();
         const double ms = std::chrono::duration<double, std::milli>(g1 - g0).count();

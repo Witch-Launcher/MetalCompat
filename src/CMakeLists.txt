@@ -9,6 +9,7 @@ add_library(MetalCompat STATIC
     GPU/Shaders/ShaderVariants.cpp
     Backends/LegacyMetal/metal_bridge.mm
     Backends/LegacyMetal/legacy_ops.mm
+    Backends/LegacyMetal/raytrace_emul.mm
     Backends/LegacyMetal/render_layered.mm
     Backends/LegacyMetal/arg_table_t1.mm
 )

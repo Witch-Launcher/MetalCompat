@@ -2,11 +2,13 @@
 // LegacyMetal backend, deterministic results, no invented data. Runs on any
 // Metal device; A9-class behavior remains PHYSICAL-VALIDATION-PENDING.
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 
 #include "Backends/LegacyMetal/metal_bridge.h"
 #include "Backends/LegacyMetal/legacy_ops.h"
 #include "Backends/LegacyMetal/render_layered.h"
 #include "Backends/LegacyMetal/arg_table_t1.h"
+#include "Backends/LegacyMetal/raytrace_emul.h"
 #include "MetalCompat/Shader.hpp"
 
 #include <cstdio>
@@ -384,6 +386,177 @@ int main() {
         } else {
             std::printf("  (tier-1 argument buffers unavailable on this device — skipped)\n");
         }
+    }
+
+    // ---- M9: software path tracer (EMULATED compute BVH, runs on A11 too) ----
+    {
+        std::printf("  == [PT] software path tracer vs CPU reference ==\n");
+        const int rtAvail = mcops_rtEmulAvailable(dev);
+        check(rtAvail == 1, "path tracer available on this device");
+
+        // ---- Scene: ground + 4 spheres (diffuse/metal/dielectric/emissive) ----
+        std::vector<MCRtPathTriangle> tris;
+        auto addTri = [&](const float v0[3], const float v1[3], const float v2[3],
+                          uint32_t mat, const float albedo[3], float fuzz, float ior) {
+            MCRtPathTriangle t = {};
+            t.v0[0]=v0[0]; t.v0[1]=v0[1]; t.v0[2]=v0[2]; t.v0Pad=0;
+            t.v1[0]=v1[0]; t.v1[1]=v1[1]; t.v1[2]=v1[2]; t.v1Pad=0;
+            t.v2[0]=v2[0]; t.v2[1]=v2[1]; t.v2[2]=v2[2]; t.v2Pad=0;
+            t.materialType = mat;
+            t.albedo[0]=albedo[0]; t.albedo[1]=albedo[1]; t.albedo[2]=albedo[2]; t.albedoPad=0;
+            t.fuzz = fuzz; t.ior = ior; t.pad[0]=0; t.pad[1]=0;
+            tris.push_back(t);
+        };
+
+        const float h = 4.0f;
+        const float gray[3] = {0.5f, 0.5f, 0.5f};
+        float g0[3] = {-h,0,-h}; float g1[3] = {h,0,-h}; float g2[3] = {h,0,h};
+        float g3[3] = {-h,0,-h}; float g4[3] = {h,0,h};  float g5[3] = {-h,0,h};
+        addTri(g0, g1, g2,  0, gray, 0.0f, 1.5f);
+        addTri(g3, g4, g5, 0, gray, 0.0f, 1.5f);
+
+        const int kStacks = 10, kRings = 5;
+        const int kSphVerts = (kStacks+1)*(kRings+1);
+        std::vector<float> V;
+        auto sphereVerts = [&](float cx, float cy, float cz, float r) -> int {
+            int base = (int)(V.size()/3);
+            for (int st = 0; st <= kStacks; ++st) {
+                const float th = float(st)/float(kStacks)*3.14159265f;
+                for (int gp = 0; gp <= kRings; ++gp) {
+                    const float ph = float(gp)/float(kRings)*6.28318531f;
+                    V.push_back(cx + r*sinf(th)*cosf(ph));
+                    V.push_back(cy + r*cosf(th));
+                    V.push_back(cz + r*sinf(th)*sinf(ph));
+                }
+            }
+            return base;
+        };
+        auto addSphereTris = [&](int vBase, uint32_t mat, const float albedo[3], float fuzz, float ior) {
+            for (int st = 0; st < kStacks; ++st) {
+                for (int gp = 0; gp < kRings; ++gp) {
+                    int i00 = vBase + st*(kRings+1) + gp;
+                    int i01 = vBase + st*(kRings+1) + gp + 1;
+                    int i10 = vBase + (st+1)*(kRings+1) + gp;
+                    int i11 = vBase + (st+1)*(kRings+1) + gp + 1;
+                    const float* a = &V[i00*3];
+                    const float* b = &V[i10*3];
+                    const float* c = &V[i11*3];
+                    const float* d = &V[i01*3];
+                    addTri(a, b, c, mat, albedo, fuzz, ior);
+                    addTri(a, c, d, mat, albedo, fuzz, ior);
+                }
+            }
+        };
+        const float red[3]   = {0.85f, 0.17f, 0.13f};
+        const float gold[3]  = {0.95f, 0.75f, 0.30f};
+        const float glass[3] = {1.0f, 1.0f, 1.0f};
+        const float emit[3]  = {6.0f, 4.0f, 2.0f};
+        int bMirror = sphereVerts(-1.0f, 0.8f, 0.0f, 0.8f);
+        addSphereTris(bMirror, 1, gold, 0.0f, 1.5f);
+        int bRed = sphereVerts(0.9f, 0.6f, -0.5f, 0.6f);
+        addSphereTris(bRed, 0, red, 0.0f, 1.5f);
+        int bGlass = sphereVerts(0.3f, 0.5f, 0.9f, 0.5f);
+        addSphereTris(bGlass, 2, glass, 0.0f, 1.5f);
+        int bLamp = sphereVerts(0.0f, 2.0f, -1.0f, 0.2f);
+        addSphereTris(bLamp, 0, emit, 0.0f, 1.5f);
+
+        // Stage triangles.
+        MCOpBuffer triBuf{};
+        check(mcops_newBuffer(dev, (uint64_t)tris.size() * sizeof(MCRtPathTriangle),
+                              MCOP_STORAGE_AUTO, &triBuf) == 0 && triBuf.handle,
+              "pt tri buffer");
+        check(mcops_writeBufferHost(&triBuf, tris.data(),
+                                    (uint64_t)tris.size() * sizeof(MCRtPathTriangle)) == 0,
+              "pt tris staged");
+
+        // Build BVH.
+        RtEmulBVHHandle bvh = nullptr;
+        uint32_t bvhNodeCount = 0;
+        check(mcops_rtEmulBuildBVH(dev, tris.data(), (uint32_t)tris.size(),
+                                   &bvh, &bvhNodeCount) == 0 && bvh, "pt BVH built");
+        check(bvhNodeCount > 0, "pt BVH has nodes");
+
+        // ---- Output texture RGBA32F ----
+        constexpr uint32_t RTW = 128, RTH = 128;
+        id<MTLDevice> devc = (__bridge id<MTLDevice>)dev;
+        MTLTextureDescriptor* td = [MTLTextureDescriptor new];
+        td.pixelFormat = MTLPixelFormatRGBA32Float;
+        td.textureType = MTLTextureType2D;
+        td.width = RTW; td.height = RTH;
+        td.storageMode = MTLStorageModePrivate;
+        td.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+        id<MTLTexture> rtTex = [devc newTextureWithDescriptor:td];
+        check(rtTex != nil, "pt render texture created");
+
+        // ---- Camera ----
+        const float cx = 0.0f, cy = 0.7f, cz = 0.0f;
+        const float camR = 4.0f;
+        float camPos[3] = {cx + cosf(0.5f)*camR, 2.0f + sinf(0.8f)*0.2f, cz + sinf(0.5f)*camR};
+        float camFwd[3] = {cx - camPos[0], cy - camPos[1], cz - camPos[2]};
+        float flen = sqrtf(camFwd[0]*camFwd[0] + camFwd[1]*camFwd[1] + camFwd[2]*camFwd[2]);
+        camFwd[0] /= flen; camFwd[1] /= flen; camFwd[2] /= flen;
+        float worldUp[3] = {0, 1, 0};
+        float camRight[3] = {worldUp[1]*camFwd[2] - worldUp[2]*camFwd[1],
+                             worldUp[2]*camFwd[0] - worldUp[0]*camFwd[2],
+                             worldUp[0]*camFwd[1] - worldUp[1]*camFwd[0]};
+        float rln = sqrtf(camRight[0]*camRight[0] + camRight[1]*camRight[1] + camRight[2]*camRight[2]);
+        camRight[0] /= rln; camRight[1] /= rln; camRight[2] /= rln;
+        float camUp[3] = {camRight[1]*camFwd[2] - camRight[2]*camFwd[1],
+                          camRight[2]*camFwd[0] - camRight[0]*camFwd[2],
+                          camRight[0]*camFwd[1] - camRight[1]*camFwd[0]};
+        MCRtCamera cam;
+        cam.pos[0]=camPos[0]; cam.pos[1]=camPos[1]; cam.pos[2]=camPos[2]; cam.posPad=0;
+        cam.fwd[0]=camFwd[0]; cam.fwd[1]=camFwd[1]; cam.fwd[2]=camFwd[2]; cam.fwdPad=0;
+        cam.right[0]=camRight[0]; cam.right[1]=camRight[1]; cam.right[2]=camRight[2]; cam.rightPad=0;
+        cam.up[0]=camUp[0]; cam.up[1]=camUp[1]; cam.up[2]=camUp[2]; cam.upPad=0;
+        cam.tanFovY = 0.47f * 1.0f; cam.pad[0] = 0; cam.pad[1] = 0; cam.pad[2] = 0;
+
+        // ---- Path trace ----
+        const uint32_t spp = 8;
+        const uint32_t maxBounces = 4;
+        const int rc = mcops_rtEmulPathTrace(dev, bvh, bvhNodeCount,
+                                             &cam, spp, maxBounces,
+                                             (__bridge void*)rtTex, RTW, RTH);
+        check(rc == 0, "pt path trace completed");
+
+        if (rc == 0) {
+            // Download center region to verify lit content.
+            MCOpBuffer readBuf{};
+            const uint32_t rx = RTW / 2, ry = RTH / 2;
+            const uint32_t rw = 32, rh = 32;
+            check(mcops_newBuffer(dev, rw * rh * 16, MCOP_STORAGE_AUTO, &readBuf) == 0,
+                  "pt readback buffer");
+            @autoreleasepool {
+                id<MTLCommandBuffer> cb = [[devc newCommandQueue] commandBuffer];
+                id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+                [be copyFromTexture:rtTex sourceSlice:0 sourceLevel:0
+                          sourceOrigin:MTLOriginMake(rx - rw/2, ry - rh/2, 0)
+                            sourceSize:MTLSizeMake(rw, rh, 1)
+                              toBuffer:(__bridge id<MTLBuffer>)readBuf.handle
+                      destinationOffset:0
+                destinationBytesPerRow:rw * 16
+                destinationBytesPerImage:rw * rh * 16];
+                [be endEncoding];
+                [cb commit];
+                [cb waitUntilCompleted];
+            }
+            check(mcops_readBufferHost(&readBuf, readBuf.cpuAddress, rw * rh * 16) == 0,
+                  "pt readback completed");
+
+            const float* pf = (const float*)readBuf.cpuAddress;
+            float centerR = pf[0], centerG = pf[1], centerB = pf[2];
+            std::printf("  pt center pixel RGBA=%f,%f,%f,%f\n",
+                        centerR, centerG, centerB, pf[3]);
+            check(centerR > 0.01f || centerG > 0.01f || centerB > 0.01f,
+                  "pt center pixel has lit content");
+            check(centerR < 2.0f && centerG < 2.0f && centerB < 2.0f,
+                  "pt center pixel within tonemapped range");
+
+            mcops_freeBuffer(&readBuf);
+        }
+
+        mcops_rtEmulFreeBVH(bvh);
+        mcops_freeBuffer(&triBuf);
     }
 
     std::printf("%s — %d checks, %d failed (%s)\n", g_failed ? "FAILED" : "PASSED",

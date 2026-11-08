@@ -44,6 +44,13 @@ struct DeviceCaps {
     std::uint8_t argumentBuffersTier = 0;
     // MTLReadWriteTextureTier: 0 none, 1 tier1, 2 tier2
     std::uint8_t readWriteTextureTier = 0;
+    // Ray tracing: 1 when -[MTLDevice supportsRaytracing] == YES (iOS 14+ selector),
+    // 0 otherwise. Honest per-device probe — Apple4/A11 reports 0 (no RT at all).
+    std::uint8_t supportsRaytracing = 0;
+    // Highest Metal era this device can natively speak through the legacy backend.
+    // 1 = Metal 1 (Apple1/MSL1.x), 2 = Metal 2 (Apple2/MSL2.0-2.1),
+    // 3 = Metal 3 (Apple3+/MSL2.2+), 4 = Metal 4 (MTLGPUFamilyMetal4, iOS 26).
+    std::uint8_t metalVersion = 3;
 };
 
 bool supportsFamily(const DeviceCaps& c, std::int32_t familyRawValue) noexcept;

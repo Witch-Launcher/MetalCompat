@@ -9,6 +9,7 @@
 //   -[MTLDevice argumentBuffersSupport]     (ios 11.0, MTLArgumentBuffersTier)
 //   -[MTLDevice readWriteTextureSupport]    (ios 11.0, MTLReadWriteTextureTier)
 //   -[MTLDevice recommendedMaxWorkingSetSize] (macos 10.12 / ios 16.0 — guarded)
+//   -[MTLDevice supportsRaytracing]         (ios 14.0 / macos 11.0, BOOL)
 // MTL4 is intentionally NOT referenced here (D-008).
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
@@ -104,6 +105,22 @@ int mcmtl_probeDefaultDevice(mc::DeviceCaps* out) noexcept {
 #else
         caps.recommendedMaxWorkingSetSize = dev.recommendedMaxWorkingSetSize;
 #endif
+        // Ray tracing: -supportsRaytracing is available iOS 14+ / macOS 11+.
+        // Honest per-device probe: Apple4/A11 returns NO (no RT at all).
+        if (@available(ios 14.0, macos 11.0, *)) {
+            caps.supportsRaytracing = [dev supportsRaytracing] ? 1 : 0;
+        }
+        // Metal version era the legacy backend can natively speak:
+        //   4 = MTLGPUFamilyMetal4 (iOS 26+ only)
+        //   3 = Apple3+ (the baseline ceiling; MSL 2.3 on iOS 14)
+        //   2 = Apple2 / 1 = Apple1 (weaker, still runs legacy MTL* API)
+        if (caps.supportsMetal4) {
+            caps.metalVersion = 4;
+        } else if (caps.appleGpu) {
+            caps.metalVersion = 3;
+        } else {
+            caps.metalVersion = 3; // non-Apple (e.g. Mac2) speaks legacy MTL* natively
+        }
         *out = caps;
         return 0;
     }
