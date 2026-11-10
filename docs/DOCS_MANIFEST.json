@@ -1,8 +1,10 @@
 {
   "project": "MetalCompat",
   "repository": "https://github.com/Witch-Launcher/MetalCompat",
+  "branch": "main",
   "webSection": "Projects",
   "languages": ["en"],
+  "bases": { "en": "" },
   "order": [
     { "group": "Research", "file": "RESEARCH.md" },
     { "group": "Architecture", "file": "ARCHITECTURE.md" },
