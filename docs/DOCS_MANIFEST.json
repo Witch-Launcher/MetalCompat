@@ -1,0 +1,23 @@
+{
+  "project": "MetalCompat",
+  "repository": "https://github.com/Witch-Launcher/MetalCompat",
+  "webSection": "Projects",
+  "languages": ["en"],
+  "order": [
+    { "group": "Research", "file": "RESEARCH.md" },
+    { "group": "Architecture", "file": "ARCHITECTURE.md" },
+    { "group": "Status", "file": "IMPLEMENTATION_STATUS.md" },
+    { "group": "Compatibility", "file": "COMPATIBILITY_STRATEGY.md" },
+    { "group": "Capability", "file": "GPU_CAPABILITY_MATRIX.md" },
+    { "group": "API", "file": "API_INVENTORY.md" },
+    { "group": "Runtime", "file": "GPU_RUNTIME.md" },
+    { "group": "Runtime", "file": "CPU_RUNTIME.md" },
+    { "group": "Testing", "file": "TESTING.md" },
+    { "group": "Testing", "file": "DEVICE_TEST_SESSION.md" },
+    { "group": "Testing", "file": "RENDER_TEST_APP.md" },
+    { "group": "Integration", "file": "MOLTENVK_INTEGRATION.md" },
+    { "group": "Performance", "file": "PERFORMANCE.md" },
+    { "group": "Legal", "file": "privacy.md" },
+    { "group": "Legal", "file": "terms.md" }
+  ]
+}
